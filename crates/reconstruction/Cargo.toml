@@ -1,0 +1,11 @@
+[package]
+name = "stl-reconstruction"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+solidcore-ops = { path = "../../vendor/sdk/solidcore/crates/solidcore-ops" }
+solidcore-record = { path = "../../vendor/sdk/solidcore/crates/solidcore-record" }
+solidcore-step = { path = "../../vendor/sdk/solidcore/crates/solidcore-step" }

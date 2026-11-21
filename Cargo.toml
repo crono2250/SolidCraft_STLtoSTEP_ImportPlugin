@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/reconstruction", "crates/plugin"]
+exclude = ["vendor/sdk/solidcore"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

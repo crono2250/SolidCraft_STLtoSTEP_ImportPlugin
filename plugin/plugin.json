@@ -1,0 +1,68 @@
+{
+  "id": "stl-to-step-import",
+  "name": "STL to STEP Import",
+  "version": "0.1.0",
+  "description": "Reconstruct certified constant-section STL meshes as analytic solids. Unsupported geometry is refused; original mesh input remains in history.",
+  "capabilities": [
+    "commands@0.2"
+  ],
+  "runtime": {
+    "module": "plugin.wasm",
+    "commands": [
+      "inspect.measure",
+      "model.mesh",
+      "timeline.add"
+    ],
+    "entries": [
+      {
+        "name": "convert",
+        "effect": "edit",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bodies"
+          ],
+          "properties": {
+            "bodies": {
+              "type": "array",
+              "title": "Mesh body",
+              "description": "Select one imported mesh body",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "tolerance": {
+              "type": "number",
+              "title": "Tolerance",
+              "default": 0.05,
+              "minimum": 1e-06,
+              "maximum": 1,
+              "unit": "mm"
+            },
+            "name": {
+              "type": "string",
+              "title": "New solid name",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "slots": [
+          {
+            "kind": "ribbon",
+            "name": "Surface"
+          }
+        ]
+      }
+    ],
+    "limits": {
+      "fuel": 100000000000,
+      "memory_mib": 128,
+      "deadline_ms": 30000,
+      "stack_kib": 1024
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# Preserve the exact bytes pinned by SDK and overlay SHA-256 locks.
+* -text
+*.wasm binary
+*.zip binary
+*.gz binary

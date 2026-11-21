@@ -1,0 +1,46 @@
+{
+  "repository": "https://github.com/tangency-labs/solidcraft",
+  "revision": "11684d744efd619677b4a2347672b081a86f3e81",
+  "archive": "https://codeload.github.com/tangency-labs/solidcraft/tar.gz/11684d744efd619677b4a2347672b081a86f3e81",
+  "sha256": "4b6d2f8046f372105ab8b9d077c40a6304d7ceea1fc0f1905adba2c3f42eaa0c",
+  "native_patch": "native/sdk-integration.patch",
+  "native_patch_sha256": "e9bab45eff09f8dae97631a7831bf91b5d8baac6bf27bb4e4078b91790fb1759",
+  "wit_sha256": "dfc5302ff58a28646c53861a6e5d73d7e98d9fbd0fd93a8ce87d99f94eff62b5",
+  "wasm_tools": {
+    "version": "1.263.0",
+    "linux_sha256": "21c036c1740a0552124c79c6e2170cb61c5b016005671a6d5bc06cf642165431",
+    "windows_sha256": "0803df158b4dbea6b029d11f4206c414f432f0447af91542817061e4f0bd912e"
+  },
+  "native_fixes_sha256": "0102b0fc6c7b232d8e9f9cdad486f591d3a563a8d69aa60357b2558722f930f3",
+  "native_cargo_lock_sha256": "886c03507141fe1201063e5ededcc6ad19d34031665496d7ec58f73ae280ece7",
+  "native_overlay_lock_sha256": "e3c8c1ab44c99b5b020f0d9c8341b859b94068fe40902c3e7301cd6f68c2365d",
+  "binaryen": {
+    "version": "133",
+    "linux_sha256": "2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489",
+    "windows_sha256": "17a2cbeac6b5693c5fbafab3838d3c65fd9c1eb38b05f5baec6c657e8c84995b"
+  },
+  "wasm_release": {
+    "opt_level": "z",
+    "lto": true,
+    "codegen_units": 1,
+    "strip": "symbols",
+    "panic": "abort",
+    "binaryen_flags": [
+      "--enable-mutable-globals",
+      "--enable-nontrapping-float-to-int",
+      "--enable-bulk-memory",
+      "--enable-sign-ext",
+      "--enable-reference-types",
+      "--enable-multivalue",
+      "--enable-bulk-memory-opt",
+      "--enable-call-indirect-overlong",
+      "-Oz",
+      "--merge-similar-functions",
+      "--converge",
+      "--strip-debug",
+      "--strip-producers",
+      "--emit-target-features"
+    ],
+    "fast_math": false
+  }
+}

@@ -1,0 +1,330 @@
+[
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/actual_controls.rs",
+    "sha256": "226d6f1032bd97e26b8fbb1af1745120983f07996ff98d3f6da5cf8e9ddc84d2"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/actual_roots.rs",
+    "sha256": "97a3adbf744e7d25b1f4e7b7b705c44527de48167025f4b94d6563c62abe8336"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/alignment.rs",
+    "sha256": "852bdf431326050bc189d063d51f608ae188f33c2ee4a4f2a08fa689d1a7af2e"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/analytic/cap.rs",
+    "sha256": "91a92f4a0480302c054b712a348235f316aa6e14d073abeef463f7144a8bc86f"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/analytic/curves.rs",
+    "sha256": "31ff9a5b08f3b80535dc20ef60393e04eda0d9c7f6a5c45402b998f999f15348"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/analytic/geometry.rs",
+    "sha256": "d53d9cc95436dee38f3c8daf1e47bbc39462a60d76baa7cab285911451375536"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/analytic/mod.rs",
+    "sha256": "7b063f0a1333b6956c7a2db23ba3bf3aa8647796d136818f3414a200ccc3b3c1"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/analytic/native.rs",
+    "sha256": "c468be05d146930ee159ccfad54cc6757a67b808777741ca822e35c573a59f9c"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/analytic/parts.rs",
+    "sha256": "c46fd2b27b0faf49e87c56d212aab20f3caec3a12ef537ec9ce1ea3640e5f303"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/analytic/tests.rs",
+    "sha256": "453c699528f7e6c7a3aedd54588fbae4feb79924f03b146c57cdec779f9a15d6"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/angular_link.rs",
+    "sha256": "e7b8c42ab618f2083ebb3d0d8cee4ab2f116d2c7d721ac2f7a37c99e38d649df"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/budgeted.rs",
+    "sha256": "65010bbd6603ee3742e719368d807c497b34889a920205f0a11f038e42aefa60"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/build_faceted.rs",
+    "sha256": "b2c03db22573d4088ec55fb4fe7e7ce7db201fda60558dae968ae57404e139a2"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/build_tool.rs",
+    "sha256": "94d37b6b2c0f5407571686c97eab9caf653d7e3ccd3d0caf9760fd3b974089a9"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/cap_exit.rs",
+    "sha256": "0c678731c071c8a619f84966363d6a76277384bf0fc0b176d3f53e88db8d4157"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/actual_ruling.rs",
+    "sha256": "b22b87731c3b731b600152bf5778a4df01a865c7422519249bf9ca889f44bb54"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/analytic_ruling.rs",
+    "sha256": "0b7fbc4ff42401fe481ba44b7ec4e3e6992ed4b6f86f9c931a784f63ef29fbbd"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/apex.rs",
+    "sha256": "83800f09e9a2213b30e793b5cbe56cc68287321a0772ff7319063b5e887e60a7"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/complete_product.rs",
+    "sha256": "02c298d88529cab429ed81ce3e97cf0731b54f817591cce007840c250fc4c921"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/endpoint_proposal.rs",
+    "sha256": "9dcc1d8d343e7fd22a023c778a9b387670969d83b776091258718a1f87cbbffd"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/errors.rs",
+    "sha256": "ff1e37097aa342560d4673674457be4bd697da4972d4a6ec3047d03178e00909"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/exact_geometry.rs",
+    "sha256": "46cd6f9a5b582b70fa1b6a085b2e60697da2fe6b7ebb706fc7eb6c627279f610"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/exact_planar.rs",
+    "sha256": "d90597a497dabc880cd630840de42f94b5c39edb26014a5e3da271702b0d0a4e"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/faceted_witness.rs",
+    "sha256": "df6e87b8556d3be9213537e36960ca345ae454c58e1740c6360a8d66f57925d8"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/fitted_recipe.rs",
+    "sha256": "74c0f933c08a3580d3bd97b8306a574302a61042e62faab17867b61053f8bcbd"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/hulls.rs",
+    "sha256": "7bac23d194b90950223b17ca0772de175a0a5b7ade25138347b5a914fb751b4d"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/layered_source.rs",
+    "sha256": "1a30c4a58531e6519b7e980ce77486abd7f84912e462818c57f91ec2da3b8269"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/mod.rs",
+    "sha256": "03ba57b06821f8b7905ab557def9d7cf4ce0373430cb349816abb76eb2525f4e"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/native_profile.rs",
+    "sha256": "de5fa96db399511ff11ee37946f3bd575540697cc4d99856c430d592a074881e"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/open_face_complex.rs",
+    "sha256": "76ffd8e196fe80225014df9656631c5d156163478a7b371ae9708057c67313b5"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/planar_chart.rs",
+    "sha256": "b9db60174e24b19f7171a7d8a0c7f6ee699004c87ae246476b979cb48cbc0d6f"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/plane_trim_image.rs",
+    "sha256": "24dd37f40124d8cc1e20c40e5b162620d677a0d485af400e1a9e764f14a951d7"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/product_cap.rs",
+    "sha256": "ed30b5fa55fa3f72a3d684a8d8f7be260b247b4d8db92afa544568c01533fd35"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/product_driver.rs",
+    "sha256": "99e295ed5da9d8f41f92c9592eecfd175edbb511f35e7494e1b6d8c4059e4446"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/product_profiles.rs",
+    "sha256": "44e5e8c83e69e6b19efe0ae9a4aa80825e9bd8c875b80d5695eb7b54b8b04236"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/product_reference.rs",
+    "sha256": "f5074227559fc8ef610963a418ef6d1be3e34fe60b40e870147c575e2555ddaf"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/product_side_band.rs",
+    "sha256": "039c264bdd0ccdbd98e69ed99938c6135e26c406f280cca7df7936ecea023478"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/reconstruction.rs",
+    "sha256": "2df3866b3e18c518bc2a7022b0a92c0c6481adebda8eacacc01bd6326dac08de"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/rectangular_trim.rs",
+    "sha256": "ae5f70e7f8afcf5722428c46892f45034e1abdfe56996f2452314d6d1dbcfae3"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/rim_motion.rs",
+    "sha256": "bd67b903b381ff88fe69c3a57f8985ed7093987f74adb25989dbaf04a8afb19f"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/ruling_band.rs",
+    "sha256": "e363887af3a74293eed3562e9644a26ad0510e4e300ce677adfb2fbef05fd961"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/sewn_curve.rs",
+    "sha256": "6b75e4fef13329021f69fe4f9b0db34251781b07291332047906dcccc96305e2"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/source_cells.rs",
+    "sha256": "9838e86611c2af6866e2fdbb70d7521fae666095822111ccb70b02a1e41d6526"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/source_index.rs",
+    "sha256": "ec86e846aa784549a206e7174ecc8430492e438930acd92aac5cbe1ec6af4690"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/source_motion.rs",
+    "sha256": "9545ea27434109945256f802ccf9b3da09ed73d98683957df76ed3424637b98c"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/source_nesting.rs",
+    "sha256": "4e098e463a989edff3e9575d2b52460785b66cae751acaf4027e932e393c73a1"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/source_prism.rs",
+    "sha256": "2ade7a5e83e45197d854713a7b39e7592d77875fc1883ca5b1948d5fe0e15ba2"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/source_topology.rs",
+    "sha256": "9f715ffd6727a12fbc83de7916b7205650570316bc2f705917e4b7a24bf2d308"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/source_view.rs",
+    "sha256": "1a143a8f55065b5f4b3cc47ed0ba7f40f5689fc534bec336ef54eebe9fc1d38c"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/certificate/target_complex.rs",
+    "sha256": "717230c8dc5a2731621c1d70e0983f5f3b1a41e3c95fe6aa1bbc5ab0e5cebac5"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/consumed_sketch.rs",
+    "sha256": "2c3074b4824784d961cfd70d226ea678649f8e0f6ead11ce8b992faee447bdcb"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/convex_controls.rs",
+    "sha256": "1129354e859db2671599e0fc89a97b2bcce6bde09aa43a030061cce081de121b"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/deviation.rs",
+    "sha256": "48cbcfbf71d46f11708994c2fa6fa193e36f0a8d550e398140379787b24f6cd6"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/faceted.rs",
+    "sha256": "c2d1ed831eddd89a5da9544aeb5df07ee2716c09ccc19e877f8b3a1d75d060ed"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/fitted_tool_certificate.rs",
+    "sha256": "c9059b7365accd692eb2b2f5f69b11e232aadf53b16b19568906a0480421477e"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/frame.rs",
+    "sha256": "d87f61bc33faf2fc1d7f8aab4e18ab2d16bca8dc311e6894cb35e9599b088ed3"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/frame_output.rs",
+    "sha256": "12bf4ff15ad5d5a64855d4dc4d41b47809174b1cc130ca6daffc934da1897bda"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/interval_trig.rs",
+    "sha256": "996d5f378be8f53408040b5fa1c55f4fa5e6fd31e690513009d3eacd1b4c1b50"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/milled.rs",
+    "sha256": "12b32554fa05bb627ad9bf301f9915d447ca567a04f42a26658e6e754e66cccb"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/mod.rs",
+    "sha256": "14890ae6dac46e114e07e604d63a9165dc92ce3da6147835a06c353f83302186"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/native_caps.rs",
+    "sha256": "cb98513fa23784d90dcf37668391614bcd2a98dbd0d7411313c9d3dd98cf0f9e"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/native_payload.rs",
+    "sha256": "e5dcf812615df1b1e0c89cf529832f6977b690b0f18955562f425682817d0433"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/numeric.rs",
+    "sha256": "699c2a7d2dc2673471bddd74e1a000ddb09b89592b0171b68b629b71801a96de"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/outline.rs",
+    "sha256": "8f3f933e804ada0291eb4ca395ee787a29c2f1cff20048cb2e3fba85f4747735"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/prepare.rs",
+    "sha256": "b714bbc26965a962fa58899e826413e5a70af2b65e96428b18f72672d084eb37"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/primitive_certificate.rs",
+    "sha256": "08b990961ed212814b637a804b58d7e23b068374a76345945ec3605968f701e1"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/prismatic.rs",
+    "sha256": "70a6d4dbda9bfe8a1b50ccad8c208d63fa5eaab668c5ba2fc4bd7bf9b303c916"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/profile.rs",
+    "sha256": "29ab75c698faa42d9c225520e14c0d4680716c1fec29f743de134efe3366f381"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/profile_chain.rs",
+    "sha256": "6f53a4594baedc9b16ecc26db45472a04342aa18db38439ab1b31f4aa36f5ea8"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/regions.rs",
+    "sha256": "e437db6e04b4f58bbbc30adcece6c715f87ac15c29ad2e73c314f9e1cc64374f"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/sketch_geometry.rs",
+    "sha256": "c0ac7f6be5fdca4da86f89a4976b80183300215739310013e0add01c717a245a"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/snap.rs",
+    "sha256": "fa48ac9a309f242480a613935b650bcfb4ec21f067b7c7a566cf73ef76016aa3"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/source.rs",
+    "sha256": "465dc0bc690c68f719e41938518b7c43e2a5c9242e7a3ead96a1c53ff85660d5"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/tests.rs",
+    "sha256": "f564db2ee95f69c3e0c94cc69da94a9a1b2fb8297191b30c2aa6df3a2504e18f"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/tools.rs",
+    "sha256": "99b4a9d7c9d5d3f98b061ebab0131d9a1aee8a71a9ae6068afc098f76656ad02"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/types.rs",
+    "sha256": "426f5a96d8952022e6774e893cb57eb17689acc475b8b5c620a25f47c573b651"
+  },
+  {
+    "path": "solidcore/crates/solidcore/src/mesh_reconstruction/work.rs",
+    "sha256": "432ae1da0b9b7f0725a6095963c5f1ce6608de60ebc74f8e8f3cbde1abed79d8"
+  },
+  {
+    "path": "solidcore/crates/solidcore-convert/src/mesh.rs",
+    "sha256": "92d41f1936ee8412ae419c9205b02ce3dfe002d40fef5654ae71da870640d7ef"
+  },
+  {
+    "path": "solidcore/crates/solidcore-ops/src/mesh/build.rs",
+    "sha256": "9ce190d238606db8b6a6671c74cd65e2bff076e6f27a2a23f7e559357848f47f"
+  },
+  {
+    "path": "solidcore/crates/solidcore-ops/src/mesh/milled.rs",
+    "sha256": "fba64fe2ed4909694cf8973ac21aaa2db180dd98efb313543430d99647fb6947"
+  },
+  {
+    "path": "solidcore/crates/solidcore-ops/src/mesh.rs",
+    "sha256": "1d99ab9b95b548978eff580e7e4b04eefcc249a83d507b550ad8c138d80c318e"
+  },
+  {
+    "path": "solidcore/crates/solidcore-record/src/mesh.rs",
+    "sha256": "c54a3a84198f2b3e82d69b3231f1f1c6fa547b391c87e99ca32bd532b10c5e69"
+  }
+]
