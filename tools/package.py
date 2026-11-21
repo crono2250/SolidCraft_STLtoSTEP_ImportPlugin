@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--wasm", type=Path)
+    parser.add_argument("--output", type=Path, default=ROOT / "dist",
+                        help="Write a package into a fresh output directory")
     args = parser.parse_args()
     target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
     core = args.wasm or target / "wasm32-unknown-unknown/release/solidcraft_stl_to_step_plugin.wasm"
@@ -18,13 +20,14 @@ def main():
     version = json.loads(manifest.read_text())["version"]
     if tomllib.loads((ROOT / "crates/plugin/Cargo.toml").read_text())["package"]["version"] != version:
         raise RuntimeError("Manifest and guest crate versions differ")
-    package = ROOT / "dist/package"
+    output_dir = args.output.resolve()
+    package = output_dir / "package"
     if package.exists():
         raise RuntimeError("Package output already exists; preserve prior results or use a fresh output")
     package.mkdir(parents=True)
     tool = get()
     # Size optimization preserves Wasm numeric semantics: no fast-math or host-limit changes.
-    optimized=ROOT/"dist/optimized-core.wasm"
+    optimized = output_dir / "optimized-core.wasm"
     optimizer=get_optimizer()
     release=json.loads((ROOT/"sdk-lock.json").read_text())["wasm_release"]
     profile=tomllib.loads((ROOT/"Cargo.toml").read_text())["profile"]["release"]
@@ -49,7 +52,7 @@ def main():
     (package / "README.txt").write_text(
         "Install this ZIP from SolidCraft Preferences > Plugins > Install plugin.\n"
         "Import an STL normally, select the mesh, then Surface > STL to STEP Import > convert.\n"
-        "Supported: certified closed constant-section parts. Unsupported shapes leave the source unchanged.\n"
+        "Supports certified prisms, cones, stepped blocks, countersunk holes and separated solids.\n"
         "Reconstruction is Native-only; the app's standard Doc STEP importer uses its existing backend.\n"
         "See https://github.com/crono2250/SolidCraft_STLtoSTEP_ImportPlugin for limitations.\n")
     shutil.copy2(ROOT / "NOTICE", package / "NOTICE")
@@ -59,7 +62,7 @@ def main():
         sums.append(hashlib.sha256(path.read_bytes()).hexdigest() + "  " + path.name)
     (package / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n")
     version = json.loads(manifest.read_text())["version"]
-    archive = ROOT / "dist" / ("stl-to-step-import-" + version + ".zip")
+    archive = output_dir / ("stl-to-step-import-" + version + ".zip")
     with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
         for path in sorted(package.iterdir()):
             info = zipfile.ZipInfo(path.name, date_time=(2026,1,1,0,0,0))

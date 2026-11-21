@@ -238,14 +238,26 @@ pub fn execute(host: &mut impl Host, entry: &str, args: Value) -> Result<Value, 
     if host.cancelled() {
         return Err(Error::Cancelled);
     }
-    let step = stl_reconstruction::reconstruct(&source, params.tolerance, &name)?;
+    let restored = stl_reconstruction::reconstruct_with_names(&source, params.tolerance, &name)?;
+    if restored.body_names.iter().skip(1).any(|output| {
+        names.iter().any(|row| {
+            ["name", "definition"]
+                .iter()
+                .any(|key| row.get(*key).and_then(Value::as_str) == Some(output.as_str()))
+        })
+    }) {
+        return Err(invalid(
+            "name",
+            "A body with a generated output name already exists; choose another name",
+        ));
+    }
     // Build and prove completely before the first edit. No partial candidate/faceted adoption.
     let imported = call(
         host,
         "timeline.add",
         json!({"feature": {
-            "type":"import", "name":name, "body_names":[name], "component":mesh.component,
-            "file":format!("stl-to-step-{fingerprint}.step"), "step":step
+            "type":"import", "name":name, "body_names":restored.body_names, "component":mesh.component,
+            "file":format!("stl-to-step-{fingerprint}.step"), "step":restored.step
         }}),
     )?;
     call(
@@ -256,7 +268,7 @@ pub fn execute(host: &mut impl Host, entry: &str, args: Value) -> Result<Value, 
         }}),
     )?;
     Ok(json!({
-        "name":name, "feature":imported.get("feature"), "source_body":body,
+        "name":name, "body_names":restored.body_names, "feature":imported.get("feature"), "source_body":body,
         "source_fingerprint":fingerprint, "source_retained":"timeline-input",
         "algorithm":stl_reconstruction::ALGORITHM_VERSION,
         "face_order":stl_reconstruction::FACE_ORDER_VERSION,

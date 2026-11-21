@@ -70,17 +70,22 @@ jobs:
           free -m
           df -h .
       - name: Compile portable component
+        id: package
         run: |
           export RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/plugin --remap-path-prefix=$HOME/.cargo=/cargo"
           cargo build --locked --release -p solidcraft-stl-to-step-plugin --target wasm32-unknown-unknown
           python3 tools/package.py
-          python3 tools/verify_package.py dist/stl-to-step-import-0.1.0.zip
+          artifact=$(python3 -c 'import json; from pathlib import Path; print("stl-to-step-import-" + json.loads(Path("plugin/plugin.json").read_text())["version"])')
+          python3 tools/verify_package.py "dist/$artifact.zip"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
       - name: Verify real SolidCraft installation and conversion
-        run: python3 tools/host_smoke.py dist/stl-to-step-import-0.1.0.zip
+        env:
+          PACKAGE_ARTIFACT: ${{ steps.package.outputs.artifact }}
+        run: python3 tools/host_smoke.py "dist/$PACKAGE_ARTIFACT.zip"
       - name: Upload directly installable artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: stl-to-step-import-0.1.0
+          name: ${{ steps.package.outputs.artifact }}
           path: dist/package/*
           if-no-files-found: error
           retention-days: 30

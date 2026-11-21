@@ -311,7 +311,11 @@ fn ruling_axis(ctx: &Ctx<'_>, tris: &[u32]) -> Option<Vec3> {
 }
 
 /// A circle through points projected along `axis`: (centre, radius).
-fn fit_circle(pts: &[Vec3], axis: Vec3, work: &super::work::Work<'_>) -> Option<(Vec3, f64)> {
+pub(super) fn fit_circle(
+    pts: &[Vec3],
+    axis: Vec3,
+    work: &super::work::Work<'_>,
+) -> Option<(Vec3, f64)> {
     let u = axis.any_perp().normalized()?;
     let v = axis.cross(u);
     let origin = pts.iter().fold(Vec3::ZERO, |s, p| s + *p) / pts.len().max(1) as f64;

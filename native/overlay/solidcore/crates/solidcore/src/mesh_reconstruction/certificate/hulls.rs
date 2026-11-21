@@ -1056,9 +1056,125 @@ fn orientation_input(normal: PointBox, slack: f64) -> Result<()> {
     Ok(())
 }
 
+/// The full signed angular progress of a radial chart curve root. P and Q
+/// are homogeneous radial coordinates already centred on the chosen axis.
+/// Because the positive homogeneous weight cancels, the angular derivative
+/// has the sign of P*Q' - Q*P'. Its whole coefficient enclosure is required.
+/// A second coefficient test puts the full root in an open half-plane, so
+/// the oriented endpoint chord represents the same (less-than-half-turn)
+/// angular interval. The caller proves actual joins and one full loop degree.
+pub(crate) fn radial_curve_turn_with_work(
+    k: &crate::Kernel,
+    work: &super::super::MeshWork,
+    piece: &Piece,
+) -> Result<i32> {
+    let [px, py, _, weight] = &piece.h;
+    let (degree, v) = weight.degrees();
+    if v != 0 || !(1..=4).contains(&degree) || piece.h.iter().any(|p| p.degrees() != (degree, 0)) {
+        return Err(refused("radial curve has an unsupported Bernstein degree"));
+    }
+    work.spend_core(k, 16_384)?;
+    work.reserve_cells_core(k, 4_096)?;
+    if (Ivl::from(weight.min_coefficient()) - Ivl::from(piece.err)).lo <= 0. {
+        return Err(refused("radial curve weights are not strictly positive"));
+    }
+    let p = BoundedPolynomial::checked(px.clone(), piece.err)?;
+    let q = BoundedPolynomial::checked(py.clone(), piece.err)?;
+    let table = Binomials::for_degree(MAX_DEGREE)?;
+    let numerator = p.mul(&q.derivative(true)?, &table)?.add(
+        &q.mul(&p.derivative(true)?, &table)?,
+        -1.,
+        &table,
+    )?;
+    let error = Ivl::new(-numerator.error, numerator.error);
+    let lower = Ivl::from(numerator.polynomial.min_coefficient()) + error;
+    let maximum = numerator
+        .polynomial
+        .coefficients()
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let upper = Ivl::from(maximum) + error;
+    let turn = if lower.is_finite() && lower.lo > 0. {
+        1
+    } else if upper.is_finite() && upper.hi < 0. {
+        -1
+    } else {
+        return Err(refused(
+            "the full radial curve is not strictly angular monotone",
+        ));
+    };
+
+    let start = |poly: &Bernstein2| {
+        poly.coefficients()
+            .first()
+            .copied()
+            .ok_or_else(|| refused("angular root start is absent"))
+    };
+    let end = |poly: &Bernstein2| {
+        poly.coefficients()
+            .last()
+            .copied()
+            .ok_or_else(|| refused("angular root end is absent"))
+    };
+    // A finite fixed covector is a proposal only. The projection hull below
+    // proves its strictly positive sign for every complete root parameter.
+    let cut_x = start(px)? + end(px)?;
+    let cut_y = start(py)? + end(py)?;
+    if !cut_x.is_finite() || !cut_y.is_finite() {
+        return Err(refused("angular half-plane covector is not finite"));
+    }
+    let delta = Ivl::new(-piece.err, piece.err);
+    for (&hx, &hy) in px.coefficients().iter().zip(py.coefficients()) {
+        work.spend_core(k, 1)?;
+        let projected =
+            Ivl::from(cut_x) * (Ivl::from(hx) + delta) + Ivl::from(cut_y) * (Ivl::from(hy) + delta);
+        if !projected.is_finite() || projected.lo <= 0. {
+            return Err(refused(
+                "the complete radial root crosses its half-plane cut",
+            ));
+        }
+    }
+    Ok(turn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actual_rational_quarter_turn_checks_the_complete_signed_derivative() {
+        let k = crate::Kernel::default();
+        let w = crate::mesh_reconstruction::MeshWork::new();
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let make = |x: Vec<f64>, y: Vec<f64>| Piece {
+            h: [
+                Bernstein2::new(2, 0, x).unwrap(),
+                Bernstein2::new(2, 0, y).unwrap(),
+                Bernstein2::new(2, 0, vec![0.; 3]).unwrap(),
+                Bernstein2::new(2, 0, vec![1., s, 1.]).unwrap(),
+            ],
+            err: 0.,
+            lower: 0.,
+            depth: 0,
+            uv: [0., 1., 0., 0.],
+            parameter_ends: [Ivl::from(0.), Ivl::from(1.), Ivl::from(0.), Ivl::from(0.)],
+        };
+        assert_eq!(
+            radial_curve_turn_with_work(&k, &w, &make(vec![1., s, 0.], vec![0., s, 1.])).unwrap(),
+            1
+        );
+        assert_eq!(
+            radial_curve_turn_with_work(&k, &w, &make(vec![0., s, 1.], vec![1., s, 0.])).unwrap(),
+            -1
+        );
+        // The two endpoint rays describe a positive quarter turn. The
+        // middle control first takes it backwards, so degree by endpoints
+        // alone would silently accept an invalid angular correspondence.
+        assert!(
+            radial_curve_turn_with_work(&k, &w, &make(vec![1., s, 0.], vec![0., -s, 1.])).is_err()
+        );
+    }
 
     fn exact(x: f64, y: f64, z: f64) -> PointBox {
         [Ivl::from(x), Ivl::from(y), Ivl::from(z)]

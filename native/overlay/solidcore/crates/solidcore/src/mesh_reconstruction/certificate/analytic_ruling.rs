@@ -122,7 +122,7 @@ impl<'a> AnalyticNetAuthority<'a> {
         self.roots
     }
 }
-fn piece(
+pub(super) fn piece(
     k: &Kernel,
     w: &MeshWork,
     coordinates: impl IntoIterator<Item = [Ivl; 4]>,
@@ -155,7 +155,7 @@ fn piece(
         parameter_ends: [Ivl::from(0.), Ivl::from(1.), Ivl::from(0.), Ivl::from(0.)],
     })
 }
-fn controls(p: &Piece) -> Result<impl Iterator<Item = [Ivl; 4]> + '_> {
+pub(super) fn controls(p: &Piece) -> Result<impl Iterator<Item = [Ivl; 4]> + '_> {
     let [a, b, c, d] = &p.h;
     let n = a.coefficients().len();
     if [b, c, d].iter().any(|v| v.coefficients().len() != n) {
@@ -403,7 +403,12 @@ fn slope(c: &Cone) -> Result<Ivl> {
 /// Forward error of the ACTUAL native basis/MAC evaluation, not a sampled
 /// evaluation or a second curve implementation. The caller supplies an original
 /// full-multiplicity root from `actual_roots` and the ORIGINAL representation bit.
-fn eval_error(k: &Kernel, w: &MeshWork, root: &ActualRoot, rational: bool) -> Result<f64> {
+pub(super) fn eval_error(
+    k: &Kernel,
+    w: &MeshWork,
+    root: &ActualRoot,
+    rational: bool,
+) -> Result<f64> {
     let p = &root.piece;
     let (degree, vdegree) =
         p.h.first()
@@ -661,6 +666,20 @@ pub(crate) fn prove_analytic_net_with_work<'a>(
     s: &'a Surface,
     maximum: f64,
 ) -> Result<AnalyticNetAuthority<'a>> {
+    prove_analytic_net_domain_with_work(k, w, s, maximum, false)
+}
+
+/// Admit a collapsed low-height row only when its radius vanishes by exact
+/// multiplication by zero. The polar converter remains a full nonzero circle,
+/// independent of the cone radius. This proves values at the apex and their
+/// whole near-apex limit; it makes no claim about a regular apex normal.
+fn prove_analytic_net_domain_with_work<'a>(
+    k: &'a Kernel,
+    w: &MeshWork,
+    s: &'a Surface,
+    maximum: f64,
+    low_apex: bool,
+) -> Result<AnalyticNetAuthority<'a>> {
     w.spend_core(k, 4096)?;
     w.reserve_cells_core(k, 4096)?;
     if !(maximum >= 0. && maximum.is_finite()) {
@@ -691,7 +710,17 @@ pub(crate) fn prove_analytic_net_with_work<'a>(
     let slope = slope(c)?;
     let radii = heights.map(|h| Ivl::from(c.base_radius()) + slope * Ivl::from(h));
     let whole_radius = finite(Ivl::from(c.base_radius()) + slope * Ivl::new(hmin, hmax))?;
-    if !whole_radius.is_positive() {
+    if low_apex {
+        if hmin != 0.
+            || c.base_radius() != 0.
+            || !slope.is_positive()
+            || rev.is_out_of_bounds_enabled()
+        {
+            return Err(no(
+                "low apex requires exact zero base and a positive clamped radius law",
+            ));
+        }
+    } else if !whole_radius.is_positive() {
         return Err(no("analytic radius crosses zero or is not finite"));
     }
     let rmax = whole_radius.hi;
@@ -973,8 +1002,12 @@ pub(crate) fn prove_analytic_net_with_work<'a>(
                 + Ivl::from(slope.mag()) * (Ivl::from(height_size) + Ivl::from(height_error)))
             + Ivl::from(4.) * Ivl::from(f64::MIN_POSITIVE),
     )?;
-    if whole_radius.lo
-        <= upper(Ivl::from(radius_error) + Ivl::from(height_error) * Ivl::from(slope.mag()))?
+    // In the admitted low-apex case the actual clamped height is nonnegative,
+    // and the value uses just a positive floating product. Underflow toward
+    // zero is enclosed by radius_error. No computation divides by this radius.
+    if !low_apex
+        && whole_radius.lo
+            <= upper(Ivl::from(radius_error) + Ivl::from(height_error) * Ivl::from(slope.mag()))?
     {
         return Err(no("rounded actual radius may reach zero"));
     }
@@ -1038,9 +1071,218 @@ pub(crate) fn prove_analytic_net_with_work<'a>(
     })
 }
 
+/// Whole-domain value comparison of the actual bounded Native frustum to one
+/// axial reference. Height is paired by fraction of the two finite intervals,
+/// and angle by the common STEP ray. The two affine height rows suffice:
+/// for fixed angle their difference is affine in the height fraction and the
+/// Euclidean norm is convex. At each row the full angular term is bounded by
+/// the Frobenius norm of its two scaled frame-column differences.
+///
+/// This binds geometry only. The caller must still pair the actual finite
+/// STEP image of every trim, its rim incidence, and its material side.
+pub(super) struct NativeRadialValues<'a> {
+    authority: AnalyticNetAuthority<'a>,
+    definition_error_upper: f64,
+}
+impl<'a> NativeRadialValues<'a> {
+    pub(super) fn authority(&self) -> &AnalyticNetAuthority<'a> {
+        &self.authority
+    }
+    pub(super) fn definition_error_upper(&self) -> f64 {
+        self.definition_error_upper
+    }
+}
+
+/// All coordinates are world coordinates of the same original axial chart.
+/// The endpoint radii are input data, never proof. Recompute the actual affine
+/// law and native-frame coefficients and reject a value outside the allowance.
+pub(super) fn prove_native_radial_values_with_work<'a>(
+    k: &'a Kernel,
+    w: &MeshWork,
+    surface: &'a Surface,
+    chart: &super::radial_frame::AxialEndpointProposal,
+    center: [f64; 2],
+    law: super::radial_band::RadiusLaw,
+    allowance: f64,
+) -> Result<NativeRadialValues<'a>> {
+    w.spend_core(k, 512)?;
+    let [radius_low, radius_high] = law.radius;
+    if !law.valid()
+        || radius_high <= 0.
+        || center.iter().any(|v| !v.is_finite())
+        || !allowance.is_finite()
+        || allowance < 0.
+    {
+        return Err(no("radial reference needs a finite positive-radius band"));
+    }
+    let authority =
+        prove_analytic_net_domain_with_work(k, w, surface, allowance, radius_low == 0.)?;
+    let SurfaceKind::Cone(cone) = surface.kind() else {
+        return Err(inv("native radial authority lost its cone definition"));
+    };
+    let placement = cone.rev().position();
+    let [own_x, own_y, own_z] = [
+        vec(placement.x_axis()),
+        vec(placement.y_axis()),
+        vec(placement.z_axis()),
+    ];
+    let own_origin = vec(placement.origin());
+    let [ax, ay, az] = chart.columns.map(|p| p.map(Ivl::from));
+    let [cx, cy] = center.map(Ivl::from);
+    let chart_origin = add(add(chart.origin.map(Ivl::from), mul(ax, cx)), mul(ay, cy));
+    let difference = |lhs: PointBox, rhs: PointBox| {
+        let [a, b, c] = lhs;
+        let [d, e, f] = rhs;
+        [a - d, b - e, c - f]
+    };
+    let domain = cone.rev().step_uv_domain();
+    let step_heights = [domain.v_min(), domain.v_max()];
+    let slope = slope(cone)?;
+    let mut band = 0_f64;
+    let mut step_magnitude = 0_f64;
+    for ((own_h, h), radius) in step_heights.into_iter().zip(law.height).zip(law.radius) {
+        let own_h = Ivl::from(own_h);
+        let actual_radius = finite(Ivl::from(cone.base_radius()) + slope * own_h)?;
+        let r = Ivl::from(radius);
+        let actual_center = add(own_origin, mul(own_z, own_h));
+        let other_center = add(chart_origin, mul(az, Ivl::from(h)));
+        let dc = norm(difference(actual_center, other_center))?;
+        let du = Ivl::from(norm(difference(mul(own_x, actual_radius), mul(ax, r)))?);
+        let dv = Ivl::from(norm(difference(mul(own_y, actual_radius), mul(ay, r)))?);
+        band = band.max(upper(Ivl::from(dc) + (du * du + dv * dv).sqrt())?);
+
+        // Account for the actual STEP assembler's trigonometric conversion,
+        // radius multiplication/addition and vector arithmetic using the same
+        // one-ulp and gamma model as the analytic authority above. Bound by
+        // operand magnitudes, including cancellation in base + slope * height.
+        let radius_inputs =
+            Ivl::from(cone.base_radius().abs()) + Ivl::from(slope.mag()) * Ivl::from(own_h.mag());
+        step_magnitude = step_magnitude.max(upper(
+            Ivl::from(norm(own_origin)?)
+                + radius_inputs * (Ivl::from(norm(own_x)?) + Ivl::from(norm(own_y)?))
+                + Ivl::from(own_h.mag()) * Ivl::from(norm(own_z)?),
+        )?);
+    }
+    let assembly = upper(
+        Ivl::from(round_up(gamma(64))) * Ivl::from(step_magnitude)
+            + Ivl::from(64.)
+                * Ivl::from(f64::MIN_POSITIVE)
+                * (Ivl::from(1.) + Ivl::from(step_magnitude)),
+    )?;
+    let definition_error_upper = upper(Ivl::from(band) + Ivl::from(assembly))?;
+    if upper(Ivl::from(definition_error_upper) + Ivl::from(authority.distance_upper()))? > allowance
+    {
+        return Err(no(
+            "actual finite cone and common radial chart exceed the supplied allowance",
+        ));
+    }
+    Ok(NativeRadialValues {
+        authority,
+        definition_error_upper,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actual_low_apex_has_complete_value_authority_without_a_regular_normal() {
+        let k = Kernel::default();
+        for swap in [false, true] {
+            for reverse in [false, true] {
+                let mut cone = Cone::new_bounded(
+                    Vec3::ZERO,
+                    Vec3::X,
+                    Vec3::Y,
+                    0.,
+                    2.,
+                    0.,
+                    360.,
+                    5.,
+                    swap,
+                    reverse,
+                    false,
+                );
+                cone.make_nurb(&k).unwrap();
+                let surface = Surface::from(cone);
+                let reference = super::super::radial_band::RadiusLaw {
+                    height: [0., 5.],
+                    radius: [0., 2.],
+                };
+                let proof = prove_native_radial_values_with_work(
+                    &k,
+                    &MeshWork::new(),
+                    &surface,
+                    &radial_chart(),
+                    [0., 0.],
+                    reference,
+                    1e-6,
+                )
+                .unwrap();
+                assert_eq!(proof.authority().covered_roots(), 4);
+                assert!(proof.definition_error_upper() < 1e-10);
+                assert!(
+                    prove_analytic_net_with_work(&k, &MeshWork::new(), &surface, 1e-6).is_err()
+                );
+            }
+        }
+    }
+
+    fn radial_chart() -> super::super::radial_frame::AxialEndpointProposal {
+        super::super::radial_frame::AxialEndpointProposal {
+            origin: [0., 0., 0.],
+            columns: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],
+            rows: Vec::new(),
+        }
+    }
+    #[test]
+    fn actual_frustum_matches_the_same_finite_radius_law() {
+        let k = Kernel::default();
+        let w = MeshWork::new();
+        let surface = Surface::from(cone(&k, true, false, false));
+        let actual = prove_native_radial_values_with_work(
+            &k,
+            &w,
+            &surface,
+            &radial_chart(),
+            [0., 0.],
+            super::super::radial_band::RadiusLaw {
+                height: [0., 5.],
+                radius: [3., 2.],
+            },
+            1e-5,
+        )
+        .unwrap();
+        assert!(core::ptr::eq(
+            actual.authority().definition(),
+            &raw const surface
+        ));
+        assert!(actual.definition_error_upper() < 1e-10);
+    }
+
+    #[test]
+    fn actual_frustum_cannot_use_a_cylinder_or_a_shifted_rim() {
+        let k = Kernel::default();
+        let surface = Surface::from(cone(&k, true, false, false));
+        for (center, height, radius) in [
+            ([0., 0.], [0., 5.], [3., 3.]),
+            ([0., 0.], [0., 4.], [3., 2.]),
+            ([0.125, 0.], [0., 5.], [3., 2.]),
+        ] {
+            assert!(prove_native_radial_values_with_work(
+                &k,
+                &MeshWork::new(),
+                &surface,
+                &radial_chart(),
+                center,
+                super::super::radial_band::RadiusLaw { height, radius },
+                1e-5,
+            )
+            .is_err());
+        }
+    }
+
     use crate::geom::axis2_placement::Axis2Placement;
     use crate::math::{Point2, INFINITE_PARAMETER};
     fn cone(k: &Kernel, frustum: bool, swap: bool, reverse: bool) -> Cone {
@@ -1342,4 +1584,435 @@ mod tests {
         );
         work.check(&k).unwrap();
     }
+}
+
+/// Match the actual 3D edges to every full affine pcurve of the exact native
+/// side rectangle. The same evaluated cone net supplies both rows; no new
+/// generated iso curve or endpoint interpolation replaces a curved edge.
+pub(super) fn prove_native_radial_edges_with_work(
+    k: &Kernel,
+    w: &MeshWork,
+    value: &NativeRadialValues<'_>,
+    rect: &super::rectangular_trim::RectangleTrim<'_>,
+    allowance: f64,
+) -> Result<f64> {
+    use super::super::actual_roots::{actual_used_roots, orient_roots};
+    use super::exact_geometry as x;
+    use crate::curve::curve::CurveKind;
+    use crate::nurbs::b_spline_surface_n_lib::p2::OrientType;
+    use crate::topology::{edge, edgeuse::p1 as eu};
+    let authority = value.authority();
+    let SurfaceKind::Cone(cone) = authority.definition().kind() else {
+        return Err(inv("radial side authority is not Cone"));
+    };
+    if !core::ptr::eq(k, authority.kernel())
+        || !core::ptr::eq(
+            authority.definition(),
+            crate::topology::face::p2::surface(rect.rebuilt, rect.face)?
+                .ok_or_else(|| no("analytic side is missing from the actual rectangle"))?,
+        )
+        || rect.domain != authority.domain()
+    {
+        return Err(no(
+            "native side and actual trim refer to different definitions",
+        ));
+    }
+    let ([lo, hi], profile, height) = rows(k, w, cone)?;
+    let height_u = cone.rev().swap_uv();
+    let equal = |a: &x::E, b: f64| (|| x::sub(a, &x::scalar(b)?))().is_some_and(|x| x::zero(&x));
+    let height_coordinate = usize::from(!height_u);
+    let profile_coordinate = usize::from(height_u);
+    let [lo_height, hi_height] = height;
+    let [lo_u, hi_u] = profile;
+    // Positive weights and compact affine rulings let a bound for the two
+    // endpoint rows also bound the horizontal derivative of the whole net.
+    let mut position = 0_f64;
+    let mut derivative = 0_f64;
+    for row in [&lo, &hi] {
+        for root in row {
+            let hull = box_of(&root.piece)?;
+            position = position.max(norm(hull)?);
+            let p = root.piece.h[3].degrees().0;
+            let mut hm = 0_f64;
+            let mut wm = 0_f64;
+            let mut wl = f64::INFINITY;
+            for [a, b, c, d] in controls(&root.piece)? {
+                hm = hm.max(norm([a, b, c])?);
+                wm = wm.max(d.mag());
+                wl = wl.min(d.lo);
+            }
+            let width =
+                (Ivl::from(root.native_interval[1]) - Ivl::from(root.native_interval[0])).lo;
+            if width <= 0. || wl <= 0. {
+                return Err(no(
+                    "native side derivative has no finite knot or weight lower bound",
+                ));
+            }
+            let quotient = Ivl::from(hm) / Ivl::from(wl);
+            let d = Ivl::from(2. * (p as f64)) * (Ivl::from(hm) + Ivl::from(wm) * quotient)
+                / (Ivl::from(wl) * Ivl::from(width));
+            derivative = derivative.max(upper(d)?);
+        }
+    }
+    let h_span = Ivl::from(hi_height) - Ivl::from(lo_height);
+    if !h_span.is_positive() {
+        return Err(no("native side has no finite ruling span"));
+    }
+    let ruling_derivative = upper(Ivl::from(2.) * Ivl::from(position) / h_span)?;
+    let mut upper_gap = 0_f64;
+    for usage in &rect.edges {
+        w.spend_core(k, 2048)?;
+        w.reserve_cells_core(k, 512)?;
+        let [start, end] = &usage.ends;
+        let on_low = equal(&start[height_coordinate], lo_height)
+            && equal(&end[height_coordinate], lo_height);
+        let on_high = equal(&start[height_coordinate], hi_height)
+            && equal(&end[height_coordinate], hi_height);
+        let (reference, u_bounds) = if on_low || on_high {
+            let forward =
+                equal(&start[profile_coordinate], lo_u) && equal(&end[profile_coordinate], hi_u);
+            let backward =
+                equal(&start[profile_coordinate], hi_u) && equal(&end[profile_coordinate], lo_u);
+            if !(forward || backward) {
+                return Err(no("native side rim is not one whole profile net row"));
+            }
+            let row = if on_low { &lo } else { &hi };
+            w.reserve_cells_core(k, row.len().saturating_mul(32))?;
+            let copy = row
+                .iter()
+                .map(|r| ActualRoot {
+                    piece: r.piece.clone(),
+                    native_interval: r.native_interval,
+                })
+                .collect();
+            (
+                native(k, w, orient_roots(k, w, copy, forward))?,
+                if forward { profile } else { [hi_u, lo_u] },
+            )
+        } else {
+            let left =
+                equal(&start[profile_coordinate], lo_u) && equal(&end[profile_coordinate], lo_u);
+            let right =
+                equal(&start[profile_coordinate], hi_u) && equal(&end[profile_coordinate], hi_u);
+            let forward = equal(&start[height_coordinate], lo_height)
+                && equal(&end[height_coordinate], hi_height);
+            let backward = equal(&start[height_coordinate], hi_height)
+                && equal(&end[height_coordinate], lo_height);
+            if !(left || right) || !(forward || backward) {
+                return Err(no("native seam is not one complete straight ruling"));
+            }
+            let endpoint = |roots: &[ActualRoot]| -> Result<[Ivl; 4]> {
+                let root = (if left { roots.first() } else { roots.last() })
+                    .ok_or_else(|| inv("native side root missing"))?;
+                let p = if left {
+                    controls(&root.piece)?.next()
+                } else {
+                    controls(&root.piece)?.last()
+                }
+                .ok_or_else(|| inv("native seam control is missing"))?;
+                Ok(p)
+            };
+            let ends = [endpoint(&lo)?, endpoint(&hi)?];
+            if !ends[0][3].is_positive() || !ends[1][3].is_positive() {
+                return Err(no("native ruling endpoint weights are not positive"));
+            }
+            let [a, b] = ends;
+            let interval = if forward {
+                height
+            } else {
+                [hi_height, lo_height]
+            };
+            (
+                vec![ActualRoot {
+                    piece: piece(k, w, if forward { [a, b] } else { [b, a] }, 1)?,
+                    native_interval: interval,
+                }],
+                interval,
+            )
+        };
+        let q = rect.rebuilt.edgeuse(usage.use_id)?;
+        let forward = match q.orientation {
+            OrientType::Same => true,
+            OrientType::Opposite => false,
+            OrientType::Unknown => return Err(no("actual conical edge use is unoriented")),
+        };
+        let native_edge = edge::curve(rect.rebuilt, usage.edge)?
+            .ok_or_else(|| no("conical trim has no actual edge"))?;
+        let used = edge::interval(rect.rebuilt, usage.edge)?;
+        let world = native(k, w, actual_used_roots(k, w, native_edge, used, forward))?;
+        // Same-fraction comparison across both complete native knot grids.
+        // A sewn rim may have extra boundaries without changing its curve.
+        let span = |roots: &[ActualRoot]| {
+            roots
+                .first()
+                .zip(roots.last())
+                .map(|(a, b)| [a.native_interval[0], b.native_interval[1]])
+        };
+        let current = if forward {
+            [used.min(), used.max()]
+        } else {
+            [used.max(), used.min()]
+        };
+        if span(&world) != Some(current) || span(&reference) != Some(u_bounds) {
+            return Err(no(
+                "attached native side and its edge do not cover their full used domains",
+            ));
+        }
+        let paired = paired_root_partitions_with_work(k, w, &world, &reference)?;
+        let (Some(uv), _) = eu::uv_trim_curve(rect.rebuilt, usage.use_id)? else {
+            return Err(no("conical edge is missing its certified affine trim"));
+        };
+        // Enclose the floating affine pcurve evaluator, including its native
+        // scaling. B-spline pcurves consume the actual NURBS term bounds.
+        let uv_error = match uv.kind() {
+            CurveKind::Line(line) => {
+                let magnitude = norm(vec(line.line_point()))?
+                    + upper(
+                        Ivl::from(
+                            line.step_interval()
+                                .min()
+                                .abs()
+                                .max(line.step_interval().max().abs()),
+                        ) * Ivl::from(line.line_scale().abs())
+                            * Ivl::from(norm(vec(line.line_vector()))?),
+                    )?;
+                upper(
+                    Ivl::from(64. * f64::EPSILON) * Ivl::from(magnitude)
+                        + Ivl::from(64. * f64::MIN_POSITIVE),
+                )?
+            }
+            CurveKind::BSpline(base) => {
+                let rational = base
+                    .gw_nurb()
+                    .ok_or_else(|| no("native seam B-spline is missing its evaluator"))?
+                    .is_rational();
+                let roots = native(
+                    k,
+                    w,
+                    super::super::actual_roots::actual_uv_roots(k, w, uv, true),
+                )?;
+                let [root] = roots.as_slice() else {
+                    return Err(no("native affine seam has extra evaluator roots"));
+                };
+                eval_error(k, w, root, rational)?
+            }
+            _ => return Err(no("actual conical trim evaluator is not affine")),
+        };
+        let allowance_from_uv =
+            Ivl::from(uv_error) * (Ivl::from(derivative) + Ivl::from(ruling_derivative));
+        let evaluator_bound = match native_edge.kind() {
+            CurveKind::Line(line) => {
+                let t = Ivl::from(used.min().abs().max(used.max().abs()));
+                let estimate = Ivl::from(norm(vec(line.line_point()))?)
+                    + t * Ivl::from(line.line_scale().abs())
+                        * Ivl::from(norm(vec(line.line_vector()))?);
+                upper(
+                    Ivl::from(64. * f64::EPSILON) * estimate + Ivl::from(64. * f64::MIN_POSITIVE),
+                )?
+            }
+            kind => {
+                let rational = match kind {
+                    CurveKind::BSpline(base) => base.gw_nurb().map(|n| n.is_rational()),
+                    CurveKind::Ellipse(ellipse) => {
+                        ellipse.base().gw_nurb().map(|n| n.is_rational())
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| no("native conical rim evaluator is missing or unsupported"))?;
+                let mut bound = 0_f64;
+                for root in &world {
+                    w.reserve_cells_core(k, 64)?;
+                    let [a, b] = root.native_interval;
+                    let original = ActualRoot {
+                        piece: root.piece.clone(),
+                        native_interval: [a.min(b), a.max(b)],
+                    };
+                    bound = bound.max(eval_error(k, w, &original, rational)?);
+                }
+                bound
+            }
+        };
+        let gap = upper(
+            Ivl::from(paired)
+                + Ivl::from(authority.distance_upper())
+                + allowance_from_uv
+                + Ivl::from(evaluator_bound),
+        )?;
+        if gap > allowance {
+            return Err(no(
+                "entire sewn conical edge exceeds its certified edge allowance",
+            ));
+        }
+        upper_gap = upper_gap.max(gap);
+    }
+    Ok(upper_gap)
+}
+
+/// Entire same-fraction pair of positive rational edge charts. Sewing can
+/// preserve the physical curve but split its knot partition differently.
+/// Take the exact union of both affine-normalized boundary sets. Whole
+/// Bernstein restrictions, with outward parameter error, cover every cell.
+pub(super) fn paired_root_partitions_with_work(
+    k: &Kernel,
+    w: &MeshWork,
+    left: &[ActualRoot],
+    right: &[ActualRoot],
+) -> Result<f64> {
+    use super::exact_geometry as x;
+    type Fraction = (x::E, x::E);
+    let compare = |a: &Fraction, b: &Fraction| -> Result<i32> {
+        (|| x::sign(&x::sub(&x::mul(&a.0, &b.1)?, &x::mul(&b.0, &a.1)?)?))()
+            .ok_or_else(|| no("exact common knot comparison overflow"))
+    };
+    let scaled = |p: f64, a: f64, z: f64| -> Result<Fraction> {
+        let difference = |v: f64| {
+            (|| x::sub(&x::scalar(v)?, &x::scalar(a)?))()
+                .ok_or_else(|| no("exact common knot difference overflow"))
+        };
+        let n = difference(p)?;
+        let d = difference(z)?;
+        match x::sign(&d) {
+            Some(1) => Ok((n, d)),
+            Some(-1) => {
+                let negate =
+                    |v: &x::E| x::scale(v, -1.).ok_or_else(|| no("common knot sign overflow"));
+                Ok((negate(&n)?, negate(&d)?))
+            }
+            _ => Err(no("a common edge partition has a collapsed domain")),
+        }
+    };
+    let knots = |roots: &[ActualRoot]| -> Result<Vec<Fraction>> {
+        if roots.is_empty() || roots.len() > 64 {
+            return Err(no("unsupported paired root count"));
+        }
+        let head = roots
+            .first()
+            .ok_or_else(|| inv("missing root head"))?
+            .native_interval[0];
+        let tail = roots
+            .last()
+            .ok_or_else(|| inv("missing root tail"))?
+            .native_interval[1];
+        w.spend_core(k, roots.len().saturating_mul(128))?;
+        w.reserve_cells_core(k, roots.len().saturating_mul(32))?;
+        let mut cursor = head;
+        let mut knots = vec![scaled(head, head, tail)?];
+        for q in roots {
+            let [a, b] = q.native_interval;
+            if a != cursor || (tail > head && b <= a) || (tail < head && b >= a) {
+                return Err(no("one actual edge has an incomplete ordered root domain"));
+            }
+            knots.push(scaled(b, head, tail)?);
+            cursor = b;
+        }
+        Ok(knots)
+    };
+    let a = knots(left)?;
+    let b = knots(right)?;
+    let restrict_exact = |root: &ActualRoot,
+                          a: &Fraction,
+                          b: &Fraction,
+                          l: &Fraction,
+                          h: &Fraction|
+     -> Result<Piece> {
+        let fraction = |v: &Fraction| -> Result<Ivl> {
+            if compare(v, l)? == 0 {
+                return Ok(Ivl::from(0.));
+            }
+            if compare(v, h)? == 0 {
+                return Ok(Ivl::from(1.));
+            }
+            if compare(v, l)? < 0 || compare(v, h)? > 0 {
+                return Err(inv("common cut lies outside its root"));
+            }
+            let value = |r: &Fraction| -> Result<Ivl> {
+                let p =
+                    x::interval(&r.0).ok_or_else(|| no("common knot numerator is unresolved"))?;
+                let q =
+                    x::interval(&r.1).ok_or_else(|| no("common knot denominator is unresolved"))?;
+                if !q.is_positive() {
+                    return Err(no("common knot denominator not positive"));
+                }
+                finite(p / q)
+            };
+            let [l, h, z] = [value(l)?, value(h)?, value(v)?];
+            let span = h - l;
+            if !span.is_positive() {
+                return Err(no("common restricted root has unresolved span"));
+            }
+            let r = finite((z - l) / span)?;
+            // Exact comparisons above prove that this value is inside the root.
+            Ok(Ivl::new(r.lo.max(0.), r.hi.min(1.)))
+        };
+        let x = fraction(a)?;
+        let y = fraction(b)?;
+        let lo = x.lo;
+        let hi = y.hi;
+        if !(lo < hi) {
+            return Err(no(
+                "a shared knot cell cannot be restricted within the evaluator range",
+            ));
+        }
+        w.spend_core(k, 256)?;
+        w.reserve_cells_core(k, 128)?;
+        let mut p = root.piece.restricted_u(lo, hi)?;
+        let delta = (Ivl::from(lo) - x).mag().max((Ivl::from(hi) - y).mag());
+        let degree = root.piece.h[3].degrees().0;
+        let largest = root
+            .piece
+            .h
+            .iter()
+            .map(Bernstein2::max_abs_coefficient)
+            .fold(0_f64, f64::max);
+        p.err = upper(
+            Ivl::from(p.err)
+                + Ivl::from(2. * degree as f64)
+                    * (Ivl::from(largest) + Ivl::from(root.piece.err))
+                    * Ivl::from(delta),
+        )?;
+        Ok(p)
+    };
+    let bounds = CurveBounds::new(k, w)?;
+    let mut error = 0_f64;
+    let mut i = 0;
+    let mut j = 0;
+    let mut at = a
+        .first()
+        .ok_or_else(|| inv("first common parameter missing"))?;
+    while let (Some(x), Some(y)) = (left.get(i), right.get(j)) {
+        w.spend_core(k, 128)?;
+        let [a0, a1] = a
+            .get(i..i + 2)
+            .ok_or_else(|| inv("left common interval missing"))?
+        else {
+            return Err(inv("left common interval has wrong length"));
+        };
+        let [b0, b1] = b
+            .get(j..j + 2)
+            .ok_or_else(|| inv("right common interval missing"))?
+        else {
+            return Err(inv("right common interval has wrong length"));
+        };
+        let compare_end = compare(a1, b1)?;
+        let next = if compare_end <= 0 { a1 } else { b1 };
+        if compare(at, next)? >= 0 {
+            return Err(inv("common curve cuts are not ordered"));
+        }
+        let p = restrict_exact(x, at, next, a0, a1)?;
+        let q = restrict_exact(y, at, next, b0, b1)?;
+        error = error.max(bounds.paired(&p, &q)?);
+        at = next;
+        if compare_end <= 0 {
+            i += 1;
+        }
+        if compare_end >= 0 {
+            j += 1;
+        }
+    }
+    if i != left.len() || j != right.len() {
+        return Err(no(
+            "actual edge pair did not cover both full root intervals",
+        ));
+    }
+    Ok(error)
 }

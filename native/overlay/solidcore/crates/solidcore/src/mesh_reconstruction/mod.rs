@@ -5,7 +5,9 @@
 mod alignment;
 mod analytic;
 mod deviation;
+mod disjoint_components;
 mod faceted;
+pub use disjoint_components::disjoint_component_meshes_with_work;
 mod frame;
 pub mod milled;
 mod native_payload;
@@ -95,7 +97,9 @@ pub use certificate::{
     certify_prismatic_reconstruction_from_source_with_work, certify_reconstruction,
     certify_reconstruction_from_source_with_work, certify_reconstruction_with_work,
     certify_source_with_work, choose_analytic_prism_from_source_with_work,
-    propose_prismatic_endpoints_with_work, ChosenAnalyticPrism, EndpointAlias,
+    choose_bored_stock_from_source_with_work, choose_orthogonal_stock_from_source_with_work,
+    choose_radial_solid_from_source_with_work, propose_prismatic_endpoints_with_work,
+    ChosenAnalyticPrism, ChosenBoredStock, ChosenRadialSolid, EndpointAlias,
     PrismaticConstructionClaim, PrismaticEndpointProposal, ProductCapClaim, ProductRimClaim,
     ReconstructionCertificate, ReconstructionRefusal, ReconstructionVerdict, SourceCertificate,
     SourceVerdict,

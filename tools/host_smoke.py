@@ -86,6 +86,160 @@ def synthetic_tube(path):
         triangles.extend([(a,c,d),(a,d,b),(e,f,h),(e,h,g),(a,b,f),(a,f,e),(c,g,h),(c,h,d)])
     synthetic_mesh(path,points,triangles,"procedural_tube")
 
+def synthetic_axial_countersink(path):
+    """An independently generated through hole with a conical entry."""
+    angles = sorted({math.tau * i / 64 for i in range(64)} |
+                    {math.atan2(y, x) % math.tau
+                     for x in (-8., 8.) for y in (-6., 6.)})
+    n = len(angles)
+    points = []
+    for z in (0., 5.):
+        for angle in angles:
+            x, y = math.cos(angle), math.sin(angle)
+            radius = min(8. / abs(x) if x else math.inf,
+                         6. / abs(y) if y else math.inf)
+            points.append((radius * x, radius * y, z))
+    for z, r in ((0., 2.), (3., 2.), (5., 4.)):
+        for angle in angles:
+            points.append((r * math.cos(angle), r * math.sin(angle), z))
+    triangles = []
+    for a in range(n):
+        b = (a + 1) % n
+        triangles.extend([(a, b, n+b), (a, n+b, n+a),
+                          (a, 2*n+a, 2*n+b), (a, 2*n+b, b),
+                          (n+a, n+b, 4*n+b), (n+a, 4*n+b, 4*n+a)])
+        for offset in (2*n, 3*n):
+            triangles.extend([(offset+a, offset+n+a, offset+n+b),
+                              (offset+a, offset+n+b, offset+b)])
+    synthetic_mesh(path, points, triangles, "procedural countersunk plate")
+
+
+def synthetic_radial(path, lower_radius, upper_radius, height):
+    """Original public 64-sector geometry with outward STL winding."""
+    n = 64
+    points = []
+    for z, radius in ((0., lower_radius), (height, upper_radius)):
+        if radius:
+            for i in range(n):
+                a = math.tau * i / n
+                points.append((radius * math.cos(a), radius * math.sin(a), z))
+    triangles = []
+    if lower_radius:
+        points.extend([(0., 0., 0.), (0., 0., height)])
+        for a in range(n):
+            b = (a + 1) % n
+            triangles.extend([(a, b, n + b), (a, n + b, n + a),
+                              (2 * n, b, a), (2 * n + 1, n + a, n + b)])
+    else:
+        points.extend([(0., 0., 0.), (0., 0., height)])
+        for a in range(n):
+            b = (a + 1) % n
+            triangles.extend([(n, b, a), (n + 1, a, b)])
+    synthetic_mesh(path, points, triangles, "procedural radial solid")
+
+
+def synthetic_stepped_block(path):
+    points = []
+    for z, x, y in ((0., 8., 6.), (2., 8., 6.), (2., 4., 2.), (5., 4., 2.)):
+        points.extend([(sx * x, sy * y, z) for sx, sy in
+                       ((-1., -1.), (1., -1.), (1., 1.), (-1., 1.))])
+    triangles = [(0, 2, 1), (0, 3, 2), (12, 13, 14), (12, 14, 15)]
+    for a in range(4):
+        b = (a + 1) % 4
+        for offset in (0, 4, 8):
+            i, j = offset + a, offset + b
+            triangles.extend([(i, j, j + 4), (i, j + 4, i + 4)])
+    synthetic_mesh(path, points, triangles, "procedural stepped blank")
+
+
+def check_stock_variants(out, installed, approval, run, command):
+    def one(label, make, volume, planes, cones, cylinders=0):
+        mesh = out / f"{label}-source.stl"
+        source = out / f"{label}-source.sc"
+        restored = out / f"{label}-restored.json"
+        exported = out / f"{label}-restored.step"
+        make(mesh)
+        imported = run(f"{label}-source", [
+            command("file.insert_mesh", path=str(mesh)),
+            command("inspect.measure"),
+        ], save=source)
+        if imported[1]["body_count"] != 1:
+            raise RuntimeError(f"{label} fixture does not have exactly one source body")
+        original = imported[1]["bodies"][0]["name"]
+        result = run(f"{label}-convert", [
+            command("plugin.run", path=str(installed), approval=approval, entry="convert",
+                    params={"bodies": [original], "tolerance": 0.05, "name": "Reconstructed"}),
+            command("inspect.measure"),
+            command("file.export", path=str(exported)),
+            command("file.save_as", path=str(restored), format="json", cache=False, preview=False),
+        ], model=source)
+        measured = result[1]
+        if measured["body_count"] != 1 or measured["bodies"][0]["name"] != "Reconstructed":
+            raise RuntimeError(f"{label} did not atomically replace its active source")
+        value = measured["bodies"][0]["volume_mm3"]
+        if not math.isclose(value, volume, rel_tol=2e-5, abs_tol=1e-5):
+            raise RuntimeError(f"{label} volume differs from its analytic formula: {value}")
+        text = exported.read_text()
+        if text.count("MANIFOLD_SOLID_BREP") != 1 or "FACETED_BREP" in text:
+            raise RuntimeError(f"{label} is not exactly one solid STEP body")
+        if (text.count("CONICAL_SURFACE") != cones or text.count("PLANE(") != planes
+                or text.count("CYLINDRICAL_SURFACE") != cylinders):
+            raise RuntimeError(f"{label} lost a designed plane or cone")
+        if not any(f.get("type") == "mesh_import" for f in json.loads(restored.read_text())["features"]):
+            raise RuntimeError(f"{label} lost its original mesh import")
+        cold = run(f"{label}-cold", [command("inspect.measure")], model=restored)[0]
+        if cold["body_count"] != 1 or not math.isclose(
+                cold["bodies"][0]["volume_mm3"], volume, rel_tol=2e-5, abs_tol=1e-5):
+            raise RuntimeError(f"{label} changed after a cache-free reopen")
+
+    one("stepped", synthetic_stepped_block, 16. * 12. * 2. + 8. * 4. * 3., 11, 0)
+    one("frustum", lambda path: synthetic_radial(path, 8., 4., 5.),
+        math.pi * 5. * (64. + 32. + 16.) / 3., 2, 1)
+    one("cone", lambda path: synthetic_radial(path, 0., 4., 5.),
+        math.pi * 5. * 16. / 3., 1, 1)
+
+    one("countersink", synthetic_axial_countersink, 960. - math.pi * (12. + 56. / 3.), 6, 1, 1)
+
+
+def check_disjoint(out, installed, approval, run, command):
+    points = [(0,0,0),(2,0,0),(2,3,0),(0,3,0),(0,0,4),(2,0,4),(2,3,4),(0,3,4)]
+    faces = [(0,3,2),(0,2,1),(4,5,6),(4,6,7),(0,1,5),(0,5,4),
+             (3,7,6),(3,6,2),(0,4,7),(0,7,3),(1,2,6),(1,6,5)]
+    mesh = out / "disjoint-source.stl"
+    source = out / "disjoint-source.sc"
+    output = out / "disjoint-restored.step"
+    saved = out / "disjoint-restored.json"
+    synthetic_mesh(mesh, points + [(x+8,y,z) for x,y,z in points],
+                   faces + [tuple(i + len(points) for i in face) for face in faces],
+                   "procedural separated boxes")
+    imported = run("disjoint-import", [command("file.insert_mesh", path=str(mesh)),
+                                       command("inspect.measure")], save=source)[1]
+    if imported["body_count"] != 1:
+        raise RuntimeError("The disconnected STL must enter the command as one source mesh")
+    original = imported["bodies"][0]["name"]
+    rows = run("disjoint-convert", [
+        command("plugin.run", path=str(installed), approval=approval, entry="convert",
+                params={"bodies":[original], "tolerance":0.05, "name":"Separate parts"}),
+        command("inspect.measure"),
+        command("file.export", path=str(output)),
+        command("edit.undo"), command("inspect.measure"),
+        command("edit.redo"), command("inspect.measure"),
+        command("file.save_as", path=str(saved), format="json", cache=False, preview=False),
+    ], model=source)
+    def proves_two(measurement):
+        return (measurement["body_count"] == 2
+                and {b["name"] for b in measurement["bodies"]} == {"Separate parts", "Separate parts (2)"}
+                and all(math.isclose(b["volume_mm3"], 24., rel_tol=1e-8) for b in measurement["bodies"]))
+    if not proves_two(rows[1]) or not proves_two(rows[6]):
+        raise RuntimeError("The two analytic solids were not adopted in a single command")
+    if rows[4]["body_count"] != 1 or rows[4]["bodies"][0]["name"] != original:
+        raise RuntimeError("One undo did not restore the original disconnected mesh")
+    if output.read_text().count("MANIFOLD_SOLID_BREP") != 2:
+        raise RuntimeError("STEP did not contain two separately reconstructed solids")
+    if not proves_two(run("disjoint-cold", [command("inspect.measure")], model=saved)[0]):
+        raise RuntimeError("Independent solids changed after cache-free reopening")
+
+
 def official_failure_cases(out, installed, invoke, run, command, source_body):
     # Use the existing host runner: expected failure and model assertions share one live session.
     suite=out/"failure-cases/stl-to-step-import"
@@ -244,6 +398,8 @@ def main():
     if not math.isclose(cold["bodies"][0]["volume_mm3"],expected,rel_tol=1e-8,abs_tol=1e-6):
         raise RuntimeError("Tube changed on cache-free reopening")
     plugins=out/"plugins"
+    check_stock_variants(out, installed, description["approval"], run, command)
+    check_disjoint(out, installed, description["approval"], run, command)
     official_failure_cases(out,installed,invoke,run,command,source_body)
 
     (out/"receipt.json").write_text(json.dumps({
@@ -251,7 +407,7 @@ def main():
         "component_sha256":sha(installed/"plugin.wasm"),
         "checks":["installable archive","one transaction undo/redo","analytic STEP","original mesh history",
                   "planar face sketch","cache-free reopening without plugin","analytic through hole","typed failure and fuel rollback"],
-        "fixture":"independently generated box, annular prism and tetrahedron; no user files",
+        "fixture":"procedural box, annular prism, stepped blank, circular frustum, pointed cone, countersunk plate, separated boxes and tetrahedron",
     },indent=2)+"\n")
     print("Passed real-host package/install/convert/STEP/undo/sketch/reopen")
 

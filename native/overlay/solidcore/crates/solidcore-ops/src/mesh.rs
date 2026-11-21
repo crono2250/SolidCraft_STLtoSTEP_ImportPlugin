@@ -18,12 +18,12 @@ pub(super) mod milled;
 
 /// Evaluation and algorithm identity, also hashed by the application's MeshConvert/MeshFit
 /// feature fingerprints. Bump when planning, acceptance or face order semantics change.
-pub const ALGORITHM_VERSION: &str = "solidcore-mesh-reconstruction/5";
+pub const ALGORITHM_VERSION: &str = "solidcore-mesh-reconstruction/6";
 
 /// Canonical output-face order and construction-role namespace version. Bump when
 /// either changes, including the namespace serialization schema. Applications hash
 /// this independently into both durable roles and reconstruction cache keys.
-pub const FACE_ORDER_VERSION: &str = "solidcore-mesh-face-order/2";
+pub const FACE_ORDER_VERSION: &str = "solidcore-mesh-face-order/3";
 
 /// A native planning refusal or an existing modelling/session failure, kept distinct.
 #[derive(Debug)]
@@ -318,69 +318,185 @@ pub(crate) fn reconstruct_single_product_with_work(
     mesh: MeshInputRef<'_>,
     tolerance: f64,
 ) -> Result<Option<CertifiedMeshRecord>> {
-    guarded("mesh::reconstruct_single_product", |k| {
-        let result = (|| {
-            kernel::admit_input_counts_with_work(
-                k,
-                work,
-                kernel::InputPurpose::Conversion,
-                mesh.positions.len(),
-                mesh.triangles.len(),
-            )
-            .map_err(geometry_error)?;
-            let input = convert::input_borrowed(mesh);
-            let prepared = kernel::prepare_conversion_with_work(k, work, &input, tolerance, &[])
-                .map_err(geometry_error)?;
-            let source = match kernel::certify_source_with_work(k, work, &input, &prepared.weld)
-                .map_err(core_error)?
-            {
-                kernel::SourceVerdict::Proven(source) => source,
-                kernel::SourceVerdict::Undecided(reason) => {
-                    return Err(Error::Certificate(CertificateFailure(reason)));
-                }
+    reconstruct_with_families(work, mesh, tolerance, false)
+}
+
+/// Reconstruct one certified prismatic product, circular cone or frustum, a rectangular
+/// blank with axial bores, or an exactly orthogonal planar solid. Family choice depends only on the source. A failed native,
+/// source, or final certificate is returned and never selects another family.
+///
+/// # Errors
+/// A typed geometry, certificate, cancellation or native construction refusal.
+pub fn reconstruct_certified_solid(
+    mesh: MeshInputRef<'_>,
+    tolerance: f64,
+) -> Result<Option<CertifiedMeshRecord>> {
+    reconstruct_with_families(&kernel::MeshWork::new(), mesh, tolerance, true)
+}
+
+fn reconstruct_with_families(
+    work: &kernel::MeshWork,
+    mesh: MeshInputRef<'_>,
+    tolerance: f64,
+    allow_extra_families: bool,
+) -> Result<Option<CertifiedMeshRecord>> {
+    guarded("mesh::reconstruct_certified_solid", |k| {
+        let input = decode_reconstruction_input(k, work, mesh)?;
+        reconstruct_input(k, work, &input, tolerance, allow_extra_families)
+    })
+}
+
+fn decode_reconstruction_input(
+    k: &solidcore::Kernel,
+    work: &kernel::MeshWork,
+    mesh: MeshInputRef<'_>,
+) -> Result<kernel::MeshInput> {
+    kernel::admit_input_counts_with_work(
+        k,
+        work,
+        kernel::InputPurpose::Conversion,
+        mesh.positions.len(),
+        mesh.triangles.len(),
+    )
+    .map_err(geometry_error)?;
+    Ok(convert::input_borrowed(mesh))
+}
+
+/// Reconstruct every strictly separated component in one original STL, using
+/// one shared workflow budget. All records must pass before an edit is made.
+///
+/// # Errors
+/// Invalid or touching components, an individual Native/source proof refusal,
+/// cancellation or budget exhaustion. No partial result is exposed.
+pub fn reconstruct_certified_bodies(
+    mesh: MeshInputRef<'_>,
+    tolerance: f64,
+) -> Result<Option<Vec<CertifiedMeshRecord>>> {
+    let work = kernel::MeshWork::new();
+    guarded("mesh::reconstruct_certified_bodies", |k| {
+        let input = decode_reconstruction_input(k, &work, mesh)?;
+        let Some(parts) = kernel::disjoint_component_meshes_with_work(k, &work, &input, tolerance)
+            .map_err(geometry_error)?
+        else {
+            return Ok(
+                reconstruct_input(k, &work, &input, tolerance, true)?.map(|solid| vec![solid])
+            );
+        };
+        let mut records = Vec::new();
+        for part in &parts {
+            let Some(solid) = reconstruct_input(k, &work, part, tolerance, true)? else {
+                return Err(refused(
+                    "component reconstruction",
+                    "an original component does not match a supported solid family",
+                ));
             };
-            let Some(chosen) = kernel::choose_analytic_prism_from_source_with_work(
+            records.push(solid);
+        }
+        work.check(k).map_err(geometry_error)?;
+        Ok(Some(records))
+    })
+}
+
+fn reconstruct_input(
+    k: &mut solidcore::Kernel,
+    work: &kernel::MeshWork,
+    input: &kernel::MeshInput,
+    tolerance: f64,
+    allow_extra_families: bool,
+) -> Result<Option<CertifiedMeshRecord>> {
+    let result = (|| {
+        let mut prepared = kernel::prepare_conversion_with_work(k, work, input, tolerance, &[])
+            .map_err(geometry_error)?;
+        let source = match kernel::certify_source_with_work(k, work, input, &prepared.weld)
+            .map_err(core_error)?
+        {
+            kernel::SourceVerdict::Proven(source) => source,
+            kernel::SourceVerdict::Undecided(reason) => {
+                return Err(Error::Certificate(CertificateFailure(reason)));
+            }
+        };
+        let chosen = kernel::choose_analytic_prism_from_source_with_work(
+            k, work, &source, &prepared, tolerance,
+        )
+        .map_err(geometry_error)?;
+        let radial = if allow_extra_families && chosen.is_none() {
+            kernel::choose_radial_solid_from_source_with_work(
                 k, work, &source, &prepared, tolerance,
             )
             .map_err(geometry_error)?
-            else {
-                return Ok(None);
-            };
-            let candidate = chosen.build_native_candidate(k).map_err(geometry_error)?;
-            kernel::check_native_payload_with_work(k, work, &candidate).map_err(geometry_error)?;
-            let mut candidate = crate::body::finish(k, candidate, crate::body::Expect::SOLID)
-                .map_err(core_error)??;
-            work.check(k).map_err(geometry_error)?;
-            // These are the same normal converters used by Body::to_record/from_record.
-            // Export may finish UV trims and canonicalize angles: it precedes proof.
-            let (record, _) =
-                solidcore_convert::brep::to_record(k, &mut candidate).map_err(record_error)?;
-            let (actual, _) =
-                solidcore_convert::brep::to_kernel(k, &record, true).map_err(record_error)?;
-            kernel::check_native_payload_with_work(k, work, &actual).map_err(geometry_error)?;
-            let mut actual = crate::body::finish(k, actual, crate::body::Expect::SOLID)
-                .map_err(core_error)??;
-            work.check(k).map_err(geometry_error)?;
-            let boundary_error_upper = match chosen
-                .certify_final(k, &prepared, &mut actual)
-                .map_err(core_error)?
-            {
-                kernel::ReconstructionVerdict::Proven(proof) => proof.boundary_error_upper(),
-                kernel::ReconstructionVerdict::Undecided(reason) => {
-                    return Err(Error::Certificate(CertificateFailure(reason)));
-                }
-            };
-            // Never export `actual` after proof. The pre-proof canonical record is
-            // immutable and is the exact output every cache-free consumer imports.
-            Ok(Some(CertifiedMeshRecord {
-                record,
-                boundary_error_upper,
-            }))
-        })();
-        // Original native/cancel/budget latches take precedence over a local refusal.
+        } else {
+            None
+        };
+        let bored = if allow_extra_families && chosen.is_none() && radial.is_none() {
+            kernel::choose_bored_stock_from_source_with_work(k, work, &source, &prepared, tolerance)
+                .map_err(geometry_error)?
+        } else {
+            None
+        };
+        let candidate = match (&chosen, &radial, &bored) {
+            (Some(prism), _, _) => prism.build_native_candidate(k).map_err(geometry_error)?,
+            (None, Some(band), _) => band.build_native_candidate(k).map_err(geometry_error)?,
+            (None, None, Some(stock)) => stock.build_native_candidate(k).map_err(geometry_error)?,
+            (None, None, None) if allow_extra_families => {
+                let Some(plan) = kernel::choose_orthogonal_stock_from_source_with_work(
+                    k, work, &source, &prepared,
+                )
+                .map_err(geometry_error)?
+                else {
+                    return Ok(None);
+                };
+                let body = kernel::build_faceted(k, &plan).map_err(geometry_error)?;
+                prepared.provenance.faceted_source_patches = plan
+                    .into_source_patch_claims_with_work(k, work)
+                    .map_err(geometry_error)?;
+                body
+            }
+            (None, None, None) => return Ok(None),
+        };
+        kernel::check_native_payload_with_work(k, work, &candidate).map_err(geometry_error)?;
+        let mut candidate =
+            crate::body::finish(k, candidate, crate::body::Expect::SOLID).map_err(core_error)??;
         work.check(k).map_err(geometry_error)?;
-        result
-    })
+        // These are the same normal converters used by Body::to_record/from_record.
+        // Export may finish UV trims and canonicalize angles: it precedes proof.
+        let (record, _) =
+            solidcore_convert::brep::to_record(k, &mut candidate).map_err(record_error)?;
+        let (actual, _) =
+            solidcore_convert::brep::to_kernel(k, &record, true).map_err(record_error)?;
+        kernel::check_native_payload_with_work(k, work, &actual).map_err(geometry_error)?;
+        let mut actual =
+            crate::body::finish(k, actual, crate::body::Expect::SOLID).map_err(core_error)??;
+        work.check(k).map_err(geometry_error)?;
+        let verdict = match (&chosen, &radial, &bored) {
+            (Some(prism), _, _) => prism.certify_final(k, &prepared, &mut actual),
+            (None, Some(band), _) => band.certify_final(k, &mut actual),
+            (None, None, Some(stock)) => stock.certify_final(k, &mut actual),
+            (None, None, None) => kernel::certify_reconstruction_from_source_with_work(
+                k,
+                work,
+                &source,
+                &prepared,
+                &mut actual,
+                tolerance,
+            ),
+        }
+        .map_err(core_error)?;
+        let boundary_error_upper = match verdict {
+            kernel::ReconstructionVerdict::Proven(proof) => proof.boundary_error_upper(),
+            kernel::ReconstructionVerdict::Undecided(reason) => {
+                return Err(Error::Certificate(CertificateFailure(reason)));
+            }
+        };
+        // Never export `actual` after proof. The pre-proof canonical record is
+        // immutable and is the exact output every cache-free consumer imports.
+        Ok(Some(CertifiedMeshRecord {
+            record,
+            boundary_error_upper,
+        }))
+    })();
+    // Original native/cancel/budget latches take precedence over a local refusal.
+    work.check(k).map_err(geometry_error)?;
+    result
 }
 
 /// Recognise one source region. Returned fitting metrics are descriptive, not an acceptance

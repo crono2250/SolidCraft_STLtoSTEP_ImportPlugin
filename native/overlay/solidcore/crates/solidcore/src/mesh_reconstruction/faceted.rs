@@ -84,7 +84,7 @@ pub fn faceted_plan_with_work(
     work_budget.check(k)?;
     answer
 }
-fn faceted_plan_of(
+pub(super) fn faceted_plan_of(
     k: &crate::Kernel,
     work_budget: &super::work::MeshWork,
     mesh: &SourceMesh,

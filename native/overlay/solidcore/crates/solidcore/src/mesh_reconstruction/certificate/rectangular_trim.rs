@@ -173,7 +173,7 @@ fn rectangle_boundary(
 }
 /// `faceuse` is a candidate only: actual face ownership, mate and material regions
 /// are re-read. This does not accept an arbitrary caller-selected UV loop.
-fn actual_affine_loop_with_work<'a>(
+pub(super) fn actual_affine_loop_with_work<'a>(
     k: &Kernel,
     work: &MeshWork,
     b: &'a Brep,
@@ -216,7 +216,7 @@ fn actual_affine_loop_with_work<'a>(
         uses.push(id);
         Ok(())
     })?;
-    if !complete || uses.len() < 4 {
+    if !complete || uses.len() < 3 {
         return Ok(None);
     }
     work.reserve_cells_core(k, uses.len())?;
@@ -357,6 +357,129 @@ pub(crate) fn rectangle_layout_claim_with_work<'a>(
         edge.ends = [a.clone(), z.clone()];
     }
     Ok(Some(layout))
+}
+
+/// Complete rectangle of a finite Native cone with one implicit collapsed
+/// side. Native stores no 3D edge for that side. Both consecutive seam uses
+/// must share exactly the same actual apex vertex. The full missing segment
+/// is allowed only at the analytic cone's exact zero-radius end.
+pub(crate) fn prove_implicit_pole_rectangle_with_work<'a>(
+    k: &Kernel,
+    work: &MeshWork,
+    b: &'a Brep,
+    id: FaceId,
+    use_id: FaceuseId,
+    values: &super::analytic_ruling::NativeRadialValues<'_>,
+) -> Result<Option<(RectangleTrim<'a>, crate::topology::VertexId)>> {
+    use crate::surface::surface::SurfaceKind;
+    let Some(surface) = crate::topology::face::p2::surface(b, id)? else {
+        return Ok(None);
+    };
+    let SurfaceKind::Cone(cone) = surface.kind() else {
+        return Ok(None);
+    };
+    if !core::ptr::eq(values.authority().definition(), surface)
+        || cone.base_radius() != 0.
+        || cone.rev().step_uv_domain().v_min() != 0.
+        || cone.rev().is_out_of_bounds_enabled()
+    {
+        return Ok(None);
+    }
+    let Some(layout) = actual_affine_loop_with_work(k, work, b, id, use_id)? else {
+        return Ok(None);
+    };
+    if layout.domain != values.authority().domain() || layout.edges.len() != 3 {
+        return Ok(None);
+    }
+    let swap = cone.rev().swap_uv();
+    let height_coordinate = usize::from(!swap);
+    let arc_coordinate = usize::from(swap);
+    let [u0, u1, v0, v1] = layout.domain;
+    let (lo, hi, length) = if swap {
+        (u0, u1, [v0, v1])
+    } else {
+        (v0, v1, [u0, u1])
+    };
+    let boundary = if cone.inside_out() { hi } else { lo };
+    let at_pole = |p: &x::P| x::scalar(boundary).is_some_and(|v| eq(&p[height_coordinate], &v));
+    let arc_ends = |a: &x::P, z: &x::P| {
+        let [Some(lo), Some(hi)] = length.map(x::scalar) else {
+            return false;
+        };
+        let (p, q) = (&a[arc_coordinate], &z[arc_coordinate]);
+        (eq(p, &lo) && eq(q, &hi)) || (eq(p, &hi) && eq(q, &lo))
+    };
+    let mut implicit = None;
+    let mut ends = Vec::new();
+    for (prev, next) in layout.edges.iter().zip(layout.edges.iter().cycle().skip(1)) {
+        work.spend_core(k, 128)?;
+        work.reserve_cells_core(k, 64)?;
+        ends.push(prev.ends.clone());
+        let (a, z) = (&prev.ends[1], &next.ends[0]);
+        if same_point(a, z) {
+            continue;
+        }
+        if implicit.is_some()
+            || prev.edge != next.edge
+            || !at_pole(a)
+            || !at_pole(z)
+            || !arc_ends(a, z)
+            || b.edgeuse(prev.use_id)?.orientation == b.edgeuse(next.use_id)?.orientation
+        {
+            return Ok(None);
+        }
+        let Some(vuse) = eu::vertexuse(b, next.use_id)? else {
+            return Ok(None);
+        };
+        let Some(v) = crate::topology::vertexuse::vertex(b, vuse)? else {
+            return Ok(None);
+        };
+        let prev_end = match b.edgeuse(prev.use_id)?.orientation {
+            OrientType::Same => crate::topology::edge::end_vertex(b, prev.edge)?,
+            OrientType::Opposite => crate::topology::edge::start_vertex(b, prev.edge)?,
+            OrientType::Unknown => return Ok(None),
+        };
+        if prev_end != Some(v) {
+            return Ok(None);
+        }
+        let v3 = crate::topology::vertex::point(b, v)?;
+        let analytic = cone.rev().position().origin();
+        let region_radius = b.tolerance().max(crate::topology::vertex::tolerance(b, v)?);
+        let Some(point) = x::vec(v3) else {
+            return Ok(None);
+        };
+        let Some(pole) = x::vec(analytic) else {
+            return Ok(None);
+        };
+        let Some(delta) = x::difference(&point, &pole) else {
+            return Ok(None);
+        };
+        let Some(squared) = x::dot(&delta, &delta).and_then(|e| x::interval(&e)) else {
+            return Ok(None);
+        };
+        let tol = crate::blend::fillet_section::interval::Ivl::from(region_radius);
+        if !(region_radius.is_finite() && region_radius > 0.) || squared.hi > (tol * tol).lo {
+            return Ok(None);
+        }
+        implicit = Some(v);
+        ends.push([a.clone(), z.clone()]);
+    }
+    let Some(apex) = implicit else {
+        return Ok(None);
+    };
+    if !rectangle_boundary(k, work, layout.domain, &ends)? {
+        return Ok(None);
+    }
+    Ok(Some((
+        RectangleTrim {
+            rebuilt: b,
+            face: id,
+            faceuse: use_id,
+            domain: layout.domain,
+            edges: layout.edges,
+        },
+        apex,
+    )))
 }
 
 #[cfg(test)]

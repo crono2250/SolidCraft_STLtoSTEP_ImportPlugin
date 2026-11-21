@@ -12,7 +12,7 @@ that crate, and does not change the installed host's backend.
 ## Download and install
 
 1. Open **Actions > Build installable plugin** and choose a successful run.
-2. Download the **stl-to-step-import-0.1.0** artifact.
+2. Download the **stl-to-step-import-0.2.0** artifact.
 3. In SolidCraft, choose **Preferences > Plugins > Install plugin...** and select
    that downloaded ZIP **without extracting it**.
 4. Review the plugin name and permissions, then install.
@@ -31,19 +31,22 @@ normal **STEP export** command.
 
 ## Current support and limits
 
-This is the experimental **Native port**, not a repackaging of the old legacy-kernel binary.
+The plugin reconstructs these closed solid families when the source geometry
+and the exported Native solid pass the full geometric and topology checks:
 
-- Only a closed, certified **single constant-section product** is currently adopted.
-  Supported profiles can contain holes and analytic lines/circular arcs when the
-  complete source and final-body proof establishes them.
-- Reconstruction is accepted only after the Native source, topology, whole-domain
-  correspondence and final canonical-body checks succeed.
-- Multi-axis/milled parts, bounded multi-product decomposition, variable-radius
-  cone/countersink reconstruction, picked-feature fitting and sheets still need
-  their complete Native acceptance paths. They are **not advertised as supported**.
-  Candidate/planning code retained from the project does not authorize adoption.
-- Unsupported or damaged inputs return an error. There is **no automatic faceted
-  fallback**, tolerance enlargement or retry under a higher execution budget.
+- Constant-section profiles with straight or circular boundaries and through holes.
+- Orthogonal stepped blanks with exact planar faces.
+- Right circular cones and frustums, including the finite apex of a complete cone.
+- Rectangular blanks with separate coaxial through-hole bands, including conical
+  entries at a change in axial radius.
+- Multiple disjoint supported solids in one STL, when the tolerance envelopes
+  of their bounding boxes remain separate. The command adopts all solids together.
+
+Connected milled parts requiring multiple machining directions, abrupt bore
+shoulders, arbitrary freeform
+surfaces, sheet meshes and selected-face feature fitting remain outside these
+families. Unsupported or damaged inputs return an error and keep the original
+mesh body. The plugin applies the requested tolerance and existing host limits.
 - The host transfer boundary permits at most 8,192 vertices, 16,384 triangles and
   1 MiB per command/result; a smaller mesh can still exceed the byte budget.
 - The manifest requests 100 billion fuel, 128 MiB linear memory, a 1 MiB guest stack
@@ -77,7 +80,7 @@ cargo fetch --locked
 cargo test --workspace --locked
 cargo build --locked --release -p solidcraft-stl-to-step-plugin --target wasm32-unknown-unknown
 python3 tools/package.py
-python3 tools/verify_package.py dist/stl-to-step-import-0.1.0.zip
+python3 tools/verify_package.py dist/stl-to-step-import-0.2.0.zip
 ```
 
 For distributable builds, remap the checkout and Cargo-home prefixes using

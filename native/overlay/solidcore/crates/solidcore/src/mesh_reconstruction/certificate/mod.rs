@@ -1,9 +1,12 @@
 //! Full exact-planar reconstruction proof and independent source preflight.
 //! Curved/moved candidates remain typed Undecided until the product/CW theorem.
 mod actual_ruling;
+mod radial_frame;
 // Value authority is consumed by the private complete-cylinder side adapter.
 mod analytic_ruling;
 mod apex;
+mod bored_stock_proposal;
+mod bored_stock_source;
 mod complete_product;
 mod endpoint_proposal;
 mod errors;
@@ -13,7 +16,9 @@ mod faceted_witness;
 mod fitted_recipe;
 pub(crate) mod hulls;
 mod layered_source;
+mod native_bored_stock;
 mod native_profile;
+mod native_radial_topology;
 pub(crate) mod open_face_complex;
 mod planar_chart;
 mod plane_trim_image;
@@ -22,6 +27,13 @@ mod product_driver;
 mod product_profiles;
 mod product_reference;
 mod product_side_band;
+mod radial_band;
+mod radial_curve;
+mod radial_proposal;
+mod radial_solid_source;
+mod radial_source;
+mod radial_stack;
+mod radial_stock;
 mod reconstruction;
 mod rectangular_trim;
 mod rim_motion;
@@ -44,7 +56,9 @@ pub use reconstruction::{
     certify_prismatic_reconstruction_from_source_with_work, certify_reconstruction,
     certify_reconstruction_from_source_with_work, certify_reconstruction_with_work,
     certify_source_with_work, choose_analytic_prism_from_source_with_work,
-    propose_prismatic_endpoints_with_work, ChosenAnalyticPrism, ReconstructionCertificate,
+    choose_bored_stock_from_source_with_work, choose_orthogonal_stock_from_source_with_work,
+    choose_radial_solid_from_source_with_work, propose_prismatic_endpoints_with_work,
+    ChosenAnalyticPrism, ChosenBoredStock, ChosenRadialSolid, ReconstructionCertificate,
     ReconstructionRefusal, ReconstructionVerdict, SourceCertificate, SourceVerdict,
 };
 

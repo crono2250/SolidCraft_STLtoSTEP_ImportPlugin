@@ -235,7 +235,7 @@ fn roots_mode(
     };
     orient_roots(k, work, roots, forward)
 }
-fn orient_roots(
+pub(crate) fn orient_roots(
     k: &Kernel,
     work: &MeshWork,
     mut roots: Vec<ActualRoot>,

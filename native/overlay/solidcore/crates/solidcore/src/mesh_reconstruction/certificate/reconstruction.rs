@@ -53,6 +53,84 @@ pub enum SourceVerdict<'source, 'proof> {
     /// The required bounded proof was not established.
     Undecided(ReconstructionRefusal),
 }
+
+/// Select exact axis-aligned planar stock before any construction. Each retained
+/// triangle must already be horizontal to one coordinate plane as stored.
+/// A tessellated curved wall cannot qualify by fitting its facets individually.
+/// The resulting Native faces still require the complete exact planar proof.
+pub fn choose_orthogonal_stock_from_source_with_work(
+    k: &Kernel,
+    work: &MeshWork,
+    source: &SourceCertificate<'_, '_>,
+    prepared: &PreparedMesh,
+) -> super::super::Result<Option<super::super::FacetedPlan>> {
+    use super::super::{source::SourceMesh, types::invalid, MeshError};
+    use crate::math::Vec3;
+    work.check(k)?;
+    let raw = source.source;
+    let count = raw
+        .positions
+        .len()
+        .checked_add(raw.triangles.len())
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| invalid("orthogonal stock source count overflow"))?;
+    work.spend(k, count)?;
+    if raw != &prepared.original {
+        return Err(MeshError::Refused {
+            stage: "orthogonal stock",
+            detail: "source identity differs".into(),
+        });
+    }
+    if !prepared.features.is_empty()
+        || !prepared.provenance.patches.is_empty()
+        || !prepared.provenance.faceted_source_patches.is_empty()
+    {
+        return Ok(None);
+    }
+    let view = source.original_view();
+    let get = |alias| {
+        view.source()
+            .position(alias)
+            .ok_or_else(|| invalid("proved orthogonal stock alias disappeared"))
+    };
+    for (_, [a, b, c]) in view.triangles() {
+        work.spend(k, 9)?;
+        let ([ax, ay, az], [bx, by, bz], [cx, cy, cz]) = (get(a)?, get(b)?, get(c)?);
+        if !(ax == bx && bx == cx || ay == by && by == cy || az == bz && bz == cz) {
+            return Ok(None);
+        }
+    }
+    let mut positions = Vec::new();
+    for id in 0..view.alias_count() {
+        work.spend(k, 3)?;
+        work.reserve_cells(k, 3)?;
+        positions.push(Vec3::from_array(get(
+            u32::try_from(id).map_err(|_| invalid("alias index overflow"))?
+        )?));
+    }
+    let (mut triangles, mut source_triangles) = (Vec::new(), Vec::new());
+    for (id, tri) in view.triangles() {
+        work.spend(k, 4)?;
+        work.reserve_cells(k, 4)?;
+        triangles.push(tri);
+        source_triangles.push(Some(
+            u32::try_from(id).map_err(|_| invalid("source triangle id overflow"))?,
+        ));
+    }
+    // Plan over the SAME retained quotient. No alternate positional tolerance
+    // or second weld can turn a curved source into this exact planar family.
+    let candidate = SourceMesh {
+        positions,
+        triangles,
+        source_triangles,
+        vertex_sources: Vec::new(),
+        weld_tolerance: 0.,
+    };
+    let plan = super::super::faceted::faceted_plan_of(k, work, &candidate)?;
+    work.check(k)?;
+    Ok(Some(plan))
+}
+
 /// Verified exact raw arrays and weld claim remain immutable while construction runs.
 /// No Kernel borrow, Clone, serialization, owner-address hash or cached `passed` flag.
 pub struct SourceCertificate<'source, 'proof> {
@@ -634,6 +712,347 @@ pub fn choose_analytic_prism_from_source_with_work<'selection, 'source: 'proof, 
     }
     work.check(k)?;
     Ok(None)
+}
+
+/// A fixed source-only cone or frustum choice, borrowing the original source proof.
+/// Its projected coordinates and fitted circles are construction data only.
+pub struct ChosenRadialSolid<'selection, 'source, 'proof> {
+    source: &'selection SourceCertificate<'source, 'proof>,
+    work: &'selection MeshWork,
+    proposal: super::radial_proposal::RadialSolidProposal,
+    tolerance: f64,
+}
+
+impl<'source, 'proof> ChosenRadialSolid<'_, 'source, 'proof> {
+    /// Build the selected Native primitive; only its normal canonical
+    /// export/re-import can supply the final body to the complete proof.
+    ///
+    /// # Errors
+    /// Typed Native construction, cancellation or workflow budget failure.
+    pub fn build_native_candidate(&self, k: &mut Kernel) -> super::super::Result<Brep> {
+        self.proposal.build_candidate(k, self.work)
+    }
+
+    /// Prove the source cap-and-band layout and actual Native topology,
+    /// trimmed surface and edge geometry against ONE axial model.
+    ///
+    /// # Errors
+    /// Original Native errors, cancellation and workflow bounds propagate.
+    pub fn certify_final<'body>(
+        &self,
+        k: &mut Kernel,
+        candidate: &'body mut Brep,
+    ) -> Result<ReconstructionVerdict<'body>>
+    where
+        'source: 'body,
+    {
+        use super::radial_frame::{build_axial_model, AxialSourceView};
+        use super::radial_solid_source::prove_source_radial_solid_with_work;
+        use super::radial_source::prove_source_radial_patch_with_work;
+        use super::source_motion::{prove_source_motion_with_work, SourceMotionVerdict};
+        use crate::blend::fillet_section::interval::Ivl;
+
+        self.work.spend_core(k, 0)?;
+        let standing = match crate::topology::brep::validation::soundness(k, candidate) {
+            Ok(standing) => standing,
+            Err(error) if super::errors::expected(&error) => {
+                return Ok(ReconstructionVerdict::Undecided(
+                    ReconstructionRefusal::NativeSolidValidity,
+                ));
+            }
+            Err(err) => return Err(err),
+        };
+        if !standing.manifold || !standing.sound() {
+            return Ok(ReconstructionVerdict::Undecided(
+                ReconstructionRefusal::NativeSolidValidity,
+            ));
+        }
+        let result = (|| {
+            let model = build_axial_model(
+                k,
+                self.work,
+                self.source.proof.alias_count(),
+                &self.proposal.chart,
+            )?;
+            let motion = match prove_source_motion_with_work(
+                k,
+                self.work,
+                &self.source.proof,
+                model.points(),
+                self.tolerance,
+            )? {
+                SourceMotionVerdict::Proven(motion) => motion,
+                SourceMotionVerdict::Undecided(reason) => {
+                    return Ok(ReconstructionVerdict::Undecided(
+                        ReconstructionRefusal::GeometryCorrespondence { reason },
+                    ));
+                }
+            };
+            let moved = AxialSourceView::bind(&model, &motion)?;
+            let patch = prove_source_radial_patch_with_work(
+                k,
+                self.work,
+                &moved,
+                &self.proposal.side,
+                self.tolerance,
+            )?;
+            let original = prove_source_radial_solid_with_work(k, self.work, &patch)?;
+            if original.filled_caps()
+                != self
+                    .proposal
+                    .side
+                    .law
+                    .radius
+                    .iter()
+                    .filter(|&&r| r > 0.)
+                    .count()
+            {
+                return Err(SolidError::Unsupported {
+                    operation: "mesh_reconstruction::certificate::chosen_radial_solid",
+                    reason: "source caps and the chosen exact pole/rim inventory differ",
+                });
+            }
+            let prior = original.side().world_upper();
+            let allowance = (Ivl::from(self.tolerance) - Ivl::from(prior)).lo;
+            let repaired = super::native_radial_topology::prove_native_radial_boundary_with_work(
+                k,
+                self.work,
+                candidate,
+                &self.proposal.chart,
+                self.proposal.side.center,
+                self.proposal.side.law,
+                allowance,
+            )?;
+            let bound = Ivl::from(prior) + Ivl::from(repaired);
+            if !bound.is_finite() || bound.hi > self.tolerance {
+                return Err(SolidError::Unsupported {
+                    operation: "mesh_reconstruction::certificate::chosen_radial_solid",
+                    reason: "complete radial solid boundary exceeds its supplied tolerance",
+                });
+            }
+            Ok(ReconstructionVerdict::Proven(ReconstructionCertificate {
+                _source: self.source.source,
+                _candidate: candidate,
+                stored_boundary_error_upper: bound.hi,
+            }))
+        })();
+        self.work.spend_core(k, 0)?;
+        match result {
+            Err(SolidError::Unsupported { reason, .. }) => Ok(ReconstructionVerdict::Undecided(
+                ReconstructionRefusal::GeometryCorrespondence { reason },
+            )),
+            other => other,
+        }
+    }
+}
+
+/// Choose one standalone cone or frustum before construction, using original aliases
+/// and deterministic preparation axes. Once a choice is made its refused
+/// source or Native certificate never selects another conversion family.
+///
+/// # Errors
+/// Original source identity, cancellation and work constraints.
+pub fn choose_radial_solid_from_source_with_work<'selection, 'source, 'proof>(
+    k: &Kernel,
+    work: &'selection MeshWork,
+    source: &'selection SourceCertificate<'source, 'proof>,
+    prepared: &PreparedMesh,
+    tolerance: f64,
+) -> super::super::Result<Option<ChosenRadialSolid<'selection, 'source, 'proof>>> {
+    use super::super::{types::invalid, MeshError};
+    work.check(k)?;
+    super::super::regions::checked_tolerance(tolerance)?;
+    let count = source
+        .source
+        .positions
+        .len()
+        .checked_add(source.source.triangles.len())
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| invalid("radial source identity count overflow"))?;
+    work.spend(k, count)?;
+    if source.source != &prepared.original {
+        return Err(MeshError::Refused {
+            stage: "chosen radial solid",
+            detail: "source identity differs".into(),
+        });
+    }
+    if !prepared.features.is_empty()
+        || !prepared.provenance.patches.is_empty()
+        || !prepared.provenance.faceted_source_patches.is_empty()
+    {
+        return Ok(None);
+    }
+    let Some(proposal) = super::radial_proposal::propose_radial_solid_with_work(
+        k,
+        work,
+        &source.original_view(),
+        &prepared.axes,
+        tolerance,
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ChosenRadialSolid {
+        source,
+        work,
+        proposal,
+        tolerance,
+    }))
+}
+
+/// A determined bored-stock candidate, bound to the same original retained
+/// inventory; construction never changes the selected side/cap/annulus claim.
+pub struct ChosenBoredStock<'s, 'raw, 'proof> {
+    source: &'s SourceCertificate<'raw, 'proof>,
+    work: &'s MeshWork,
+    proposal: super::bored_stock_proposal::BoredStockProposal,
+    tolerance: f64,
+}
+impl<'raw, 'proof> ChosenBoredStock<'_, 'raw, 'proof> {
+    /// Create the selected Native body, before canonical record export/reload.
+    ///
+    /// # Errors
+    /// Typed Native construction, cancellation and workflow bounds.
+    pub fn build_native_candidate(&self, k: &mut Kernel) -> super::super::Result<Brep> {
+        self.proposal.build_candidate(k, self.work)
+    }
+
+    /// Verify the original caps/stock and every concave band; then verify the
+    /// exact final canonical Native body against that same finite solid.
+    ///
+    /// # Errors
+    /// Original Native, budget and cancellation errors propagate.
+    pub fn certify_final<'body>(
+        &self,
+        k: &mut Kernel,
+        candidate: &'body mut Brep,
+    ) -> Result<ReconstructionVerdict<'body>>
+    where
+        'raw: 'body,
+    {
+        use super::radial_frame::{build_axial_model, AxialSourceView};
+        use super::source_motion::{prove_source_motion_with_work, SourceMotionVerdict};
+        use crate::blend::fillet_section::interval::Ivl;
+        let standing = match crate::topology::brep::validation::soundness(k, candidate) {
+            Ok(standing) => standing,
+            Err(e) if super::errors::expected(&e) => {
+                return Ok(ReconstructionVerdict::Undecided(
+                    ReconstructionRefusal::NativeSolidValidity,
+                ))
+            }
+            Err(e) => return Err(e),
+        };
+        if !standing.manifold || !standing.sound() {
+            return Ok(ReconstructionVerdict::Undecided(
+                ReconstructionRefusal::NativeSolidValidity,
+            ));
+        }
+        let assembled = (|| {
+            let chart = build_axial_model(
+                k,
+                self.work,
+                self.source.proof.alias_count(),
+                &self.proposal.chart,
+            )?;
+            let moving = match prove_source_motion_with_work(
+                k,
+                self.work,
+                &self.source.proof,
+                chart.points(),
+                self.tolerance,
+            )? {
+                SourceMotionVerdict::Proven(m) => m,
+                SourceMotionVerdict::Undecided(reason) => {
+                    return Ok(ReconstructionVerdict::Undecided(
+                        ReconstructionRefusal::GeometryCorrespondence { reason },
+                    ))
+                }
+            };
+            let view = AxialSourceView::bind(&chart, &moving)?;
+            let original = super::bored_stock_source::prove_bored_stock_source_with_work(
+                k,
+                self.work,
+                &view,
+                &self.proposal,
+                self.tolerance,
+            )?;
+            let allowance = (Ivl::from(self.tolerance) - Ivl::from(original)).lo;
+            let actual = super::native_bored_stock::prove_native_bored_stock_with_work(
+                k,
+                self.work,
+                candidate,
+                &self.proposal,
+                allowance,
+            )?;
+            let bound = Ivl::from(original) + Ivl::from(actual);
+            if !bound.is_finite() || bound.hi > self.tolerance {
+                return Err(SolidError::Unsupported {
+                    operation: "mesh_reconstruction::certificate::chosen_bored_stock",
+                    reason: "whole native stock boundary exceeds the original tolerance",
+                });
+            }
+            Ok(ReconstructionVerdict::Proven(ReconstructionCertificate {
+                _source: self.source.source,
+                _candidate: candidate,
+                stored_boundary_error_upper: bound.hi,
+            }))
+        })();
+        self.work.spend_core(k, 0)?;
+        match assembled {
+            Err(SolidError::Unsupported { reason, .. }) => Ok(ReconstructionVerdict::Undecided(
+                ReconstructionRefusal::GeometryCorrespondence { reason },
+            )),
+            other => other,
+        }
+    }
+}
+
+/// Choose one rectangular source stock with a through-hole containing multiple
+/// axial bands. This choice is completed before any construction takes place.
+///
+/// # Errors
+/// Typed input, cancellation and work bound failures.
+pub fn choose_bored_stock_from_source_with_work<'s, 'raw, 'proof>(
+    k: &Kernel,
+    work: &'s MeshWork,
+    source: &'s SourceCertificate<'raw, 'proof>,
+    prepared: &PreparedMesh,
+    tolerance: f64,
+) -> super::super::Result<Option<ChosenBoredStock<'s, 'raw, 'proof>>> {
+    use super::super::{types::invalid, MeshError};
+    work.check(k)?;
+    let count = source
+        .source
+        .positions
+        .len()
+        .checked_add(source.source.triangles.len())
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| invalid("stock source identity count overflow"))?;
+    work.spend(k, count)?;
+    if source.source != &prepared.original {
+        return Err(MeshError::Refused {
+            stage: "chosen bored stock",
+            detail: "source identity differs".into(),
+        });
+    }
+    if !prepared.features.is_empty()
+        || !prepared.provenance.patches.is_empty()
+        || !prepared.provenance.faceted_source_patches.is_empty()
+    {
+        return Ok(None);
+    }
+    let proposal = super::bored_stock_proposal::propose_rectangular_bored_stock_with_work(
+        k,
+        work,
+        &source.original_view(),
+        tolerance,
+    )?;
+    Ok(proposal.map(|proposal| ChosenBoredStock {
+        source,
+        work,
+        proposal,
+        tolerance,
+    }))
 }
 
 /// One candidate convenience using one shared source/final budget. Multi-candidate

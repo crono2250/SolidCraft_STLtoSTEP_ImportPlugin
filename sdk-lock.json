@@ -13,7 +13,7 @@
   },
   "native_fixes_sha256": "0102b0fc6c7b232d8e9f9cdad486f591d3a563a8d69aa60357b2558722f930f3",
   "native_cargo_lock_sha256": "886c03507141fe1201063e5ededcc6ad19d34031665496d7ec58f73ae280ece7",
-  "native_overlay_lock_sha256": "e3c8c1ab44c99b5b020f0d9c8341b859b94068fe40902c3e7301cd6f68c2365d",
+  "native_overlay_lock_sha256": "e0e7cf1fd05c0feccba0317837a0f0aaaa72190afaf0d1c55e68dd3f32593eae",
   "binaryen": {
     "version": "133",
     "linux_sha256": "2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489",
