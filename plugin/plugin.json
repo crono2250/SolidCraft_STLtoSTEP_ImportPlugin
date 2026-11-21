@@ -1,7 +1,7 @@
 {
   "id": "stl-to-step-import",
   "name": "STL to STEP Import",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Reconstruct supported closed STL meshes as analytic solids, including cones and countersunk through holes. Unsupported geometry is refused; original mesh input remains in history.",
   "capabilities": [
     "commands@0.2"

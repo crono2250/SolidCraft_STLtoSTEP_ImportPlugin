@@ -145,8 +145,7 @@ fn native_radial_cone_closes_at_the_single_apex() {
     assert_eq!(step.matches("=PLANE(").count(), 1);
 }
 
-#[test]
-fn native_axial_countersink_keeps_its_conical_and_cylindrical_walls() {
+fn rectangular_bored_blank(bore_rings: &[(f64, f64)]) -> MeshInput {
     let mut angles = (0..64)
         .map(|i| std::f64::consts::TAU * f64::from(i) / 64.)
         .collect::<Vec<_>>();
@@ -174,7 +173,7 @@ fn native_axial_countersink_keeps_its_conical_and_cylindrical_walls() {
             ));
         }
     }
-    for (z, radius) in [(0., 2.), (3., 2.), (5., 4.)] {
+    for &(z, radius) in bore_rings {
         for &a in &angles {
             let (y, x) = a.sin_cos();
             mesh.positions.push(Vec3::new(
@@ -184,6 +183,7 @@ fn native_axial_countersink_keeps_its_conical_and_cylindrical_walls() {
             ));
         }
     }
+    let last = (1 + bore_rings.len() as u32) * n;
     for a in 0..n {
         let b = (a + 1) % n;
         mesh.triangles.extend([
@@ -191,16 +191,22 @@ fn native_axial_countersink_keeps_its_conical_and_cylindrical_walls() {
             [a, n + b, n + a],
             [a, 2 * n + a, 2 * n + b],
             [a, 2 * n + b, b],
-            [n + a, n + b, 4 * n + b],
-            [n + a, 4 * n + b, 4 * n + a],
+            [n + a, n + b, last + b],
+            [n + a, last + b, last + a],
         ]);
-        for offset in [2 * n, 3 * n] {
+        for offset in (2 * n..last).step_by(n as usize) {
             mesh.triangles.extend([
                 [offset + a, offset + n + a, offset + n + b],
                 [offset + a, offset + n + b, offset + b],
             ]);
         }
     }
+    mesh
+}
+
+#[test]
+fn native_axial_countersink_keeps_its_conical_and_cylindrical_walls() {
+    let mesh = rectangular_bored_blank(&[(0., 2.), (3., 2.), (5., 4.)]);
     let input = mesh.clone();
     let step = reconstruct(&mesh, 0.05, "Cylindrical through hole and conical entry").unwrap();
     assert_eq!(mesh, input);
@@ -208,6 +214,18 @@ fn native_axial_countersink_keeps_its_conical_and_cylindrical_walls() {
     assert_eq!(step.matches("=PLANE(").count(), 6);
     assert_eq!(step.matches("=CONICAL_SURFACE(").count(), 1);
     assert_eq!(step.matches("=CYLINDRICAL_SURFACE(").count(), 1);
+}
+
+#[test]
+fn stepped_bore_preserves_both_cylinders_and_the_annular_shoulder() {
+    for [lo, hi] in [[2., 4.], [4., 2.]] {
+        let mesh = rectangular_bored_blank(&[(0., lo), (3., lo), (3., hi), (5., hi)]);
+        let step = reconstruct(&mesh, 0.05, "Through hole with a square shoulder").unwrap();
+        assert_eq!(step.matches("MANIFOLD_SOLID_BREP").count(), 1);
+        assert_eq!(step.matches("=PLANE(").count(), 7);
+        assert_eq!(step.matches("=CONICAL_SURFACE(").count(), 0);
+        assert_eq!(step.matches("=CYLINDRICAL_SURFACE(").count(), 2);
+    }
 }
 
 #[test]
@@ -256,4 +274,136 @@ fn independent_stl_shells_reconstruct_together_with_stable_solid_names() {
     let unsafe_gap = two_boxes(0.025);
     let result = super::reconstruct_with_names(&unsafe_gap, 0.05, "Close solid pair");
     assert!(matches!(result,Err(error) if error.message.contains("expanded solid bounds")));
+}
+
+#[test]
+fn separately_drilled_perpendicular_bores_keep_two_cylindrical_faces() {
+    use std::collections::BTreeMap;
+    let side = 20_f64;
+    let radius = 1.25;
+    let outline = [[0., 0.], [side, 0.], [side, side], [0., side]];
+    let tools: [Option<[f64; 2]>; 3] = [Some([6., 8.]), None, Some([13., 14.])];
+    let world = |axis: usize, z: f64, uv: [f64; 2]| {
+        let mut p = [0.; 3];
+        p[axis] = z;
+        p[(axis + 1) % 3] = uv[0];
+        p[(axis + 2) % 3] = uv[1];
+        p
+    };
+    let mid = |[x, y]: [f64; 2]| [[x, 0.], [side, y], [x, side], [0., y]];
+    let mut outer_contacts = Vec::new();
+    for (axis, center) in tools.iter().enumerate() {
+        if let Some(c) = center {
+            for level in [0., side] {
+                outer_contacts.extend(mid(*c).map(|p| world(axis, level, p)));
+            }
+        }
+    }
+    let mut cells = Vec::<[[f64; 3]; 3]>::new();
+    for axis in 0..3usize {
+        let radial = tools[axis].map(|[x, y]| {
+            let corner_angles =
+                outline.map(|[a, b]| (b - y).atan2(a - x).rem_euclid(std::f64::consts::TAU));
+            let mut angles = (0..64)
+                .map(|i| f64::from(i) * std::f64::consts::TAU / 64.)
+                .collect::<Vec<_>>();
+            angles.extend(corner_angles);
+            angles.sort_by(f64::total_cmp);
+            angles.dedup();
+            let stations = corner_angles.map(|a| {
+                angles
+                    .iter()
+                    .position(|&v| v == a)
+                    .expect("generated corner ray")
+            });
+            let ring = angles
+                .into_iter()
+                .map(|a| [x + radius * a.cos(), y + radius * a.sin()])
+                .collect::<Vec<_>>();
+            (ring, stations)
+        });
+        for level in [0., side] {
+            for i in 0..4 {
+                let j = (i + 1) % 4;
+                let [a, b] = [outline[i], outline[j]].map(|p| world(axis, level, p));
+                let varying = (0..3).find(|&c| a[c] != b[c]).expect("nonzero outer side");
+                let mut outer = vec![a, b];
+                outer.extend(outer_contacts.iter().copied().filter(|p| {
+                    (0..3).all(|c| c == varying || p[c] == a[c])
+                        && p[varying] >= a[varying].min(b[varying])
+                        && p[varying] <= a[varying].max(b[varying])
+                }));
+                outer.sort_by(|p, q| p[varying].total_cmp(&q[varying]));
+                outer.dedup();
+                if a[varying] > b[varying] {
+                    outer.reverse();
+                }
+                let mut push = |mut tri: [[f64; 3]; 3]| {
+                    if level == 0. {
+                        tri.swap(1, 2);
+                    }
+                    cells.push(tri);
+                };
+                if let (Some((ring, stations)), Some(center)) = (&radial, tools[axis]) {
+                    let m = world(axis, level, mid(center)[i]);
+                    let middle = outer
+                        .iter()
+                        .position(|p| *p == m)
+                        .expect("matched stock boundary split point");
+                    let [from, to] = [stations[i], stations[j]];
+                    let [first, last] = [ring[from], ring[to]].map(|p| world(axis, level, p));
+                    for side in outer[..=middle].windows(2) {
+                        push([side[0], side[1], first]);
+                    }
+                    for side in outer[middle..].windows(2) {
+                        push([side[0], side[1], last]);
+                    }
+                    let length = (ring.len() + to - from) % ring.len();
+                    for offset in 0..length {
+                        let p = world(axis, level, ring[(from + offset) % ring.len()]);
+                        let q = world(axis, level, ring[(from + offset + 1) % ring.len()]);
+                        push([m, q, p]);
+                    }
+                } else {
+                    let center = world(axis, level, [side / 2.; 2]);
+                    for edge in outer.windows(2) {
+                        push([edge[0], edge[1], center]);
+                    }
+                }
+            }
+        }
+        if let Some((ring, _)) = radial {
+            for i in 0..ring.len() {
+                let [u, v] = [ring[i], ring[(i + 1) % ring.len()]];
+                let [a, b, c, d] = [
+                    world(axis, 0., u),
+                    world(axis, side, u),
+                    world(axis, side, v),
+                    world(axis, 0., v),
+                ];
+                cells.extend([[a, b, c], [a, c, d]]);
+            }
+        }
+    }
+    let mut mesh = MeshInput {
+        positions: Vec::new(),
+        triangles: Vec::new(),
+    };
+    let mut ids = BTreeMap::<[u64; 3], u32>::new();
+    for tri in cells {
+        let indices = tri.map(|p| {
+            let p = p.map(|x| f64::from(x as f32));
+            let key = p.map(|x| if x == 0. { 0 } else { x.to_bits() });
+            *ids.entry(key).or_insert_with(|| {
+                let id = mesh.positions.len() as u32;
+                mesh.positions.push(Vec3::new(p[0], p[1], p[2]));
+                id
+            })
+        });
+        mesh.triangles.push(indices);
+    }
+    let step = reconstruct(&mesh, 0.05, "Independent perpendicular through holes").unwrap();
+    assert_eq!(step.matches("MANIFOLD_SOLID_BREP").count(), 1);
+    assert_eq!(step.matches("=PLANE(").count(), 6);
+    assert_eq!(step.matches("=CYLINDRICAL_SURFACE(").count(), 2);
 }

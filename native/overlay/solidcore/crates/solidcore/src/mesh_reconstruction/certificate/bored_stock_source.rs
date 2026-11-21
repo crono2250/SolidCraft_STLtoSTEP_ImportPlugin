@@ -9,7 +9,7 @@
 //! Deviations: none. Full cells and one shared MeshWork.
 
 use super::super::work::MeshWork;
-use super::bored_stock_proposal::BoredStockProposal;
+use super::bored_stock_proposal::{axes_for, perpendicular_bands_are_separate, BoredStockProposal};
 use super::exact_geometry as x;
 use super::radial_frame::AxialSourceView;
 use super::radial_source::prove_source_radial_patch_with_work;
@@ -100,11 +100,12 @@ fn rectangular_ring(
 pub(crate) fn prove_bored_stock_source_with_work(
     k: &Kernel,
     w: &MeshWork,
-    view: &AxialSourceView<'_, '_, '_>,
+    views: [Option<&AxialSourceView<'_, '_, '_>>; 3],
     proposal: &BoredStockProposal,
     tolerance: f64,
 ) -> Result<f64> {
-    if !core::ptr::eq(view.model().proposal(), &proposal.chart) {
+    let view = views[2].ok_or_else(|| refused("outer stock source chart is absent"))?;
+    if !core::ptr::eq(view.model().proposal(), &proposal.charts[2]) {
         return Err(refused(
             "stock and bore claims do not bind the same source chart",
         ));
@@ -122,38 +123,88 @@ pub(crate) fn prove_bored_stock_source_with_work(
         .map(ids)
         .collect::<Result<Vec<_>>>()?;
     let mut bore_faces = Vec::new();
-    for bore in &proposal.bores {
-        w.reserve_output_core(k, bore.len())?;
+    let mut source_shoulders = Vec::new();
+    for (index, bore) in proposal.bores.iter().enumerate() {
+        let radial =
+            views[bore.axis].ok_or_else(|| refused("optional source bore chart was not proved"))?;
+        if !core::ptr::eq(radial.model().proposal(), &proposal.charts[bore.axis]) {
+            return Err(refused("source bore belongs to another cardinal chart"));
+        }
+        w.reserve_output_core(k, bore.bands.len())?;
         let mut faces = Vec::new();
-        for band in bore {
+        for band in &bore.bands {
             groups.push(ids(&band.triangles)?);
             faces.push(prove_source_radial_patch_with_work(
-                k, w, view, band, tolerance,
+                k, w, radial, band, tolerance,
             )?);
+        }
+        for shoulder in &bore.shoulders {
+            source_shoulders.push((index, shoulder.after_band, groups.len()));
+            groups.push(ids(&shoulder.triangles)?);
         }
         bore_faces.push(faces);
     }
-    let stacks = bore_faces
-        .iter()
-        .map(|faces| prove_source_radial_stack_with_work(k, w, faces))
-        .collect::<Result<Vec<_>>>()?;
     let source = match source_cells_with_work(k, w, view.world().source(), &groups)? {
-        SourceCellsCover::Proven(s) => s,
+        SourceCellsCover::Proven(source) => source,
         SourceCellsCover::Undecided(reason) => return Err(refused(reason)),
     };
     let [lo, hi] = proposal.bounds;
-    let [a, b, _] = lo;
-    let [c, d, _] = hi;
-    let outline = [[a, b], [c, b], [c, d], [a, d]];
     let mut upper = view.world_error_upper(0.)?;
-    for (i, stack) in stacks.iter().enumerate() {
-        // The outer walls are exactly fixed in local coordinates. Prior source
-        // motion is accounted separately when mapping this model to raw arrays.
-        prove_convex_stock_radial_collar_with_work(k, w, &outline, 0., stack)?;
-        for earlier in stacks.iter().take(i) {
-            separate_source_radial_stacks_with_work(k, w, earlier, stack)?;
+    let mut all_stacks = Vec::new();
+    for (index, faces) in bore_faces.iter().enumerate() {
+        let axis = proposal.bores[index].axis;
+        let [x, y, _] = axes_for(axis);
+        let outline = [
+            [lo[x], lo[y]],
+            [hi[x], lo[y]],
+            [hi[x], hi[y]],
+            [lo[x], hi[y]],
+        ];
+        let mut sections = Vec::new();
+        for face in faces {
+            let section = prove_source_radial_stack_with_work(k, w, core::slice::from_ref(face))?;
+            prove_convex_stock_radial_collar_with_work(k, w, &outline, 0., &section)?;
+            for &(dir, ref other) in &all_stacks {
+                if dir == axis {
+                    separate_source_radial_stacks_with_work(k, w, other, &section)?;
+                } else {
+                    w.spend_core(k, 256)?;
+                    let [earlier] = other.patches() else {
+                        return Err(refused("source band certificate has invalid inventory"));
+                    };
+                    if !perpendicular_bands_are_separate(
+                        [dir, axis],
+                        [earlier.claim(), face.claim()],
+                        [earlier.local_upper(), face.local_upper()],
+                    ) {
+                        return Err(refused("perpendicular original bore envelopes may overlap"));
+                    }
+                }
+            }
+            upper = upper.max(section.world_upper());
+            sections.push((axis, section));
         }
-        upper = upper.max(stack.world_upper());
+        for (join, pair) in faces.windows(2).enumerate() {
+            let [lower, upper_face] = pair else {
+                return Err(refused("bore lost its adjacent bands"));
+            };
+            if let Some((_, _, cells)) = source_shoulders
+                .iter()
+                .find(|&&(i, j, _)| i == index && j == join)
+            {
+                let patch = source
+                    .patches
+                    .get(*cells)
+                    .ok_or_else(|| refused("source shoulder cells absent"))?;
+                let bound = super::bore_shoulder::prove_source_bore_shoulder_with_work(
+                    k, w, lower, upper_face, patch,
+                )?;
+                upper = upper.max(bound);
+            } else {
+                prove_source_radial_stack_with_work(k, w, pair)?;
+            }
+        }
+        all_stacks.extend(sections);
     }
     for (i, (cells, ids)) in source.patches.iter().zip(&proposal.planes).enumerate() {
         let coordinate = i / 2;
@@ -210,27 +261,28 @@ pub(crate) fn prove_bored_stock_source_with_work(
                 "stock plane does not have one complete outer rectangle",
             ));
         }
-        if coordinate == 2 {
-            for stack in &stacks {
-                let band = if i % 2 == 0 {
-                    stack.patches().first()
-                } else {
-                    stack.patches().last()
-                }
-                .ok_or_else(|| refused("bore stack lost its cap band"))?;
-                let hole = rim_at(k, w, band, level)?;
-                let mut matched = None;
-                for (j, rim) in cells.rims.iter().enumerate() {
-                    if !used.contains(&j) && opposite_ring(k, w, rim, hole)? {
-                        if matched.replace(j).is_some() {
-                            return Err(refused("two cap loops claim one through bore"));
-                        }
+        for (bands, bore) in bore_faces.iter().zip(&proposal.bores) {
+            if bore.axis != coordinate {
+                continue;
+            }
+            let band = if i % 2 == 0 {
+                bands.first()
+            } else {
+                bands.last()
+            }
+            .ok_or_else(|| refused("bore stack lost its cap band"))?;
+            let hole = rim_at(k, w, band, level)?;
+            let mut matched = None;
+            for (j, rim) in cells.rims.iter().enumerate() {
+                if !used.contains(&j) && opposite_ring(k, w, rim, hole)? {
+                    if matched.replace(j).is_some() {
+                        return Err(refused("two cap loops claim one through bore"));
                     }
                 }
-                used.insert(
-                    matched.ok_or_else(|| refused("cap does not cover a full through-hole rim"))?,
-                );
             }
+            used.insert(
+                matched.ok_or_else(|| refused("cap does not cover a full through-hole rim"))?,
+            );
         }
         if used.len() != cells.rims.len() {
             return Err(refused("unattributed original stock wall or cap boundary"));

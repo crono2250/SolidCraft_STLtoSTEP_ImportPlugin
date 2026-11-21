@@ -189,6 +189,37 @@ impl<'a, 'frame, 'raw> AxialSourceView<'a, 'frame, 'raw> {
             model,
         })
     }
+    /// Bind a second cardinal chart to the same complete source motion by
+    /// exact equality of every original alias endpoint. No motion is rerun.
+    pub(crate) fn bind_same_world(
+        k: &Kernel,
+        w: &MeshWork,
+        model: &'a AxialModel<'frame>,
+        motion: &'a SourceMotion<'a, 'raw>,
+    ) -> Result<Self> {
+        let original = motion.endpoints();
+        if original.len() != model.points().len()
+            || original.len() != motion.source().alias_count()
+            || original.len() != model.proposal.rows.len()
+        {
+            return Err(refused(
+                "second cardinal chart has a different alias inventory",
+            ));
+        }
+        for (a, b) in original.iter().zip(model.points()) {
+            w.spend_core(k, 64)?;
+            if a != b {
+                return Err(refused(
+                    "second cardinal chart moves an already bound original endpoint",
+                ));
+            }
+        }
+        Ok(Self {
+            world: ExactSourceView::motion(motion),
+            model,
+        })
+    }
+
     pub(crate) fn world(&self) -> &ExactSourceView<'a, 'raw> {
         &self.world
     }

@@ -952,7 +952,7 @@ impl<'raw, 'proof> ChosenBoredStock<'_, 'raw, 'proof> {
                 k,
                 self.work,
                 self.source.proof.alias_count(),
-                &self.proposal.chart,
+                &self.proposal.charts[2],
             )?;
             let moving = match prove_source_motion_with_work(
                 k,
@@ -969,10 +969,43 @@ impl<'raw, 'proof> ChosenBoredStock<'_, 'raw, 'proof> {
                 }
             };
             let view = AxialSourceView::bind(&chart, &moving)?;
+            let build_chart = |axis| {
+                build_axial_model(
+                    k,
+                    self.work,
+                    self.source.proof.alias_count(),
+                    &self.proposal.charts[axis],
+                )
+            };
+            let charts = [
+                self.proposal
+                    .bores
+                    .iter()
+                    .any(|b| b.axis == 0)
+                    .then(|| build_chart(0))
+                    .transpose()?,
+                self.proposal
+                    .bores
+                    .iter()
+                    .any(|b| b.axis == 1)
+                    .then(|| build_chart(1))
+                    .transpose()?,
+            ];
+            let other = [
+                charts[0]
+                    .as_ref()
+                    .map(|m| AxialSourceView::bind_same_world(k, self.work, m, &moving))
+                    .transpose()?,
+                charts[1]
+                    .as_ref()
+                    .map(|m| AxialSourceView::bind_same_world(k, self.work, m, &moving))
+                    .transpose()?,
+            ];
+            let views = [other[0].as_ref(), other[1].as_ref(), Some(&view)];
             let original = super::bored_stock_source::prove_bored_stock_source_with_work(
                 k,
                 self.work,
-                &view,
+                views,
                 &self.proposal,
                 self.tolerance,
             )?;

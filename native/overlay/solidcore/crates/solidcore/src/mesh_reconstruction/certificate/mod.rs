@@ -5,6 +5,7 @@ mod radial_frame;
 // Value authority is consumed by the private complete-cylinder side adapter.
 mod analytic_ruling;
 mod apex;
+mod bore_shoulder;
 mod bored_stock_proposal;
 mod bored_stock_source;
 mod complete_product;

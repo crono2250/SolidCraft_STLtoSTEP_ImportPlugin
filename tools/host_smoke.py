@@ -3,6 +3,8 @@
 from pathlib import Path
 import argparse, hashlib, json, math, os, platform, shutil, subprocess, tarfile, urllib.request, zipfile
 
+from perpendicular_fixture import geometry as perpendicular_bore_cells
+
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.45.0"
 HOSTS = {
@@ -86,8 +88,8 @@ def synthetic_tube(path):
         triangles.extend([(a,c,d),(a,d,b),(e,f,h),(e,h,g),(a,b,f),(a,f,e),(c,g,h),(c,h,d)])
     synthetic_mesh(path,points,triangles,"procedural_tube")
 
-def synthetic_axial_countersink(path):
-    """An independently generated through hole with a conical entry."""
+def synthetic_axial_bore(path, rings):
+    """An independently generated axisymmetric through bore."""
     angles = sorted({math.tau * i / 64 for i in range(64)} |
                     {math.atan2(y, x) % math.tau
                      for x in (-8., 8.) for y in (-6., 6.)})
@@ -99,16 +101,17 @@ def synthetic_axial_countersink(path):
             radius = min(8. / abs(x) if x else math.inf,
                          6. / abs(y) if y else math.inf)
             points.append((radius * x, radius * y, z))
-    for z, r in ((0., 2.), (3., 2.), (5., 4.)):
+    for z, r in rings:
         for angle in angles:
             points.append((r * math.cos(angle), r * math.sin(angle), z))
+    last = (1 + len(rings)) * n
     triangles = []
     for a in range(n):
         b = (a + 1) % n
         triangles.extend([(a, b, n+b), (a, n+b, n+a),
                           (a, 2*n+a, 2*n+b), (a, 2*n+b, b),
-                          (n+a, n+b, 4*n+b), (n+a, 4*n+b, 4*n+a)])
-        for offset in (2*n, 3*n):
+                          (n+a, n+b, last+b), (n+a, last+b, last+a)])
+        for offset in range(2*n, last, n):
             triangles.extend([(offset+a, offset+n+a, offset+n+b),
                               (offset+a, offset+n+b, offset+b)])
     synthetic_mesh(path, points, triangles, "procedural countersunk plate")
@@ -198,7 +201,19 @@ def check_stock_variants(out, installed, approval, run, command):
     one("cone", lambda path: synthetic_radial(path, 0., 4., 5.),
         math.pi * 5. * 16. / 3., 1, 1)
 
-    one("countersink", synthetic_axial_countersink, 960. - math.pi * (12. + 56. / 3.), 6, 1, 1)
+    one("countersink", lambda path: synthetic_axial_bore(path, ((0., 2.), (3., 2.), (5., 4.))),
+        960. - math.pi * (12. + 56. / 3.), 6, 1, 1)
+    one("counterbore", lambda path: synthetic_axial_bore(path, ((0., 2.), (3., 2.), (3., 4.), (5., 4.))),
+        960. - math.pi * (12. + 32.), 7, 0, 2)
+
+    def perpendicular(path):
+        geometry = perpendicular_bore_cells()
+        points = sorted({p for cell in geometry for p in cell})
+        indices = {p: i for i, p in enumerate(points)}
+        synthetic_mesh(path, points, [[indices[p] for p in cell] for cell in geometry],
+                       "procedural perpendicular bores")
+
+    one("perpendicular", perpendicular, 20. ** 3 - 2. * math.pi * 1.25 ** 2 * 20., 6, 0, 2)
 
 
 def check_disjoint(out, installed, approval, run, command):
@@ -407,7 +422,7 @@ def main():
         "component_sha256":sha(installed/"plugin.wasm"),
         "checks":["installable archive","one transaction undo/redo","analytic STEP","original mesh history",
                   "planar face sketch","cache-free reopening without plugin","analytic through hole","typed failure and fuel rollback"],
-        "fixture":"procedural box, annular prism, stepped blank, circular frustum, pointed cone, countersunk plate, separated boxes and tetrahedron",
+        "fixture":"procedural box, annular prism, stepped blank, circular frustum, pointed cone, countersunk plate, stepped counterbore, perpendicular stock bores, separated boxes and tetrahedron",
     },indent=2)+"\n")
     print("Passed real-host package/install/convert/STEP/undo/sketch/reopen")
 

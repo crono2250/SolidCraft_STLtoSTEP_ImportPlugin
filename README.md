@@ -12,7 +12,7 @@ that crate, and does not change the installed host's backend.
 ## Download and install
 
 1. Open **Actions > Build installable plugin** and choose a successful run.
-2. Download the **stl-to-step-import-0.2.0** artifact.
+2. Download the **stl-to-step-import-0.3.0** artifact.
 3. In SolidCraft, choose **Preferences > Plugins > Install plugin...** and select
    that downloaded ZIP **without extracting it**.
 4. Review the plugin name and permissions, then install.
@@ -37,13 +37,13 @@ and the exported Native solid pass the full geometric and topology checks:
 - Constant-section profiles with straight or circular boundaries and through holes.
 - Orthogonal stepped blanks with exact planar faces.
 - Right circular cones and frustums, including the finite apex of a complete cone.
-- Rectangular blanks with separate coaxial through-hole bands, including conical
-  entries at a change in axial radius.
+- Rectangular blanks with independent through bores along stock axes. The bores
+  may include cylindrical counterbores with annular shoulders and conical
+  countersinks. Bores along different axes must remain disjoint.
 - Multiple disjoint supported solids in one STL, when the tolerance envelopes
   of their bounding boxes remain separate. The command adopts all solids together.
 
-Connected milled parts requiring multiple machining directions, abrupt bore
-shoulders, arbitrary freeform
+Intersecting bores, milled parts outside the stock families above, freeform
 surfaces, sheet meshes and selected-face feature fitting remain outside these
 families. Unsupported or damaged inputs return an error and keep the original
 mesh body. The plugin applies the requested tolerance and existing host limits.
@@ -80,7 +80,7 @@ cargo fetch --locked
 cargo test --workspace --locked
 cargo build --locked --release -p solidcraft-stl-to-step-plugin --target wasm32-unknown-unknown
 python3 tools/package.py
-python3 tools/verify_package.py dist/stl-to-step-import-0.2.0.zip
+python3 tools/verify_package.py dist/stl-to-step-import-0.3.0.zip
 ```
 
 For distributable builds, remap the checkout and Cargo-home prefixes using
@@ -100,7 +100,8 @@ The installer ZIP contains only the manifest, component, license, instructions a
 content checksums and the required dependency notices.
 
 CI also runs the inherited Native mesh/Ops regressions and the real portable
-SolidCraft host against independently generated box, annular-prism and tetrahedron inputs. It checks installation,
+SolidCraft host against procedural fixtures, including a counterbore and
+independent bores along perpendicular axes. It checks installation,
 conversion, STEP, one undo/redo, preserved mesh history, planar-face sketching and
 reopening without the plugin. Check the actual run before relying on its artifact;
 a workflow definition alone is not evidence of a passing build.

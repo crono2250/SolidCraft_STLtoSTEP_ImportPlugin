@@ -52,7 +52,7 @@ def main():
     (package / "README.txt").write_text(
         "Install this ZIP from SolidCraft Preferences > Plugins > Install plugin.\n"
         "Import an STL normally, select the mesh, then Surface > STL to STEP Import > convert.\n"
-        "Supports certified prisms, cones, stepped blocks, countersunk holes and separated solids.\n"
+        "Supports certified prisms, cones, stepped stock, countersinks, counterbores, separate stock bores and disjoint solids.\n"
         "Reconstruction is Native-only; the app's standard Doc STEP importer uses its existing backend.\n"
         "See https://github.com/crono2250/SolidCraft_STLtoSTEP_ImportPlugin for limitations.\n")
     shutil.copy2(ROOT / "NOTICE", package / "NOTICE")

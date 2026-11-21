@@ -18,12 +18,12 @@ pub(super) mod milled;
 
 /// Evaluation and algorithm identity, also hashed by the application's MeshConvert/MeshFit
 /// feature fingerprints. Bump when planning, acceptance or face order semantics change.
-pub const ALGORITHM_VERSION: &str = "solidcore-mesh-reconstruction/6";
+pub const ALGORITHM_VERSION: &str = "solidcore-mesh-reconstruction/7";
 
 /// Canonical output-face order and construction-role namespace version. Bump when
 /// either changes, including the namespace serialization schema. Applications hash
 /// this independently into both durable roles and reconstruction cache keys.
-pub const FACE_ORDER_VERSION: &str = "solidcore-mesh-face-order/3";
+pub const FACE_ORDER_VERSION: &str = "solidcore-mesh-face-order/4";
 
 /// A native planning refusal or an existing modelling/session failure, kept distinct.
 #[derive(Debug)]

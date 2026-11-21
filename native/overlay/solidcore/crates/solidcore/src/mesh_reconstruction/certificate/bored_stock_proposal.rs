@@ -18,11 +18,11 @@ use crate::Kernel;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct BoredStockProposal {
-    pub(crate) chart: AxialEndpointProposal,
+    pub(crate) charts: [AxialEndpointProposal; 3],
     pub(crate) bounds: [[f64; 3]; 2],
     /// Lower X, upper X, lower Y, upper Y, lower Z, upper Z.
     pub(crate) planes: [Vec<usize>; 6],
-    pub(crate) bores: Vec<Vec<RadialPatchClaim>>,
+    pub(crate) bores: Vec<AxialBore>,
 }
 type Cells = Vec<(usize, [u32; 3])>;
 
@@ -85,118 +85,217 @@ fn bore_components(k: &Kernel, work: &MeshWork, cells: &[(usize, [u32; 3])]) -> 
     Ok(output)
 }
 
+pub(crate) struct BoreShoulder {
+    pub(crate) after_band: usize,
+    pub(crate) triangles: Vec<usize>,
+}
+
+pub(crate) struct AxialBore {
+    pub(crate) axis: usize,
+    pub(crate) bands: Vec<RadialPatchClaim>,
+    pub(crate) shoulders: Vec<BoreShoulder>,
+}
+
+/// Fit independently at the two ends of each complete axial band. An
+/// interior plane can have two radii only when it provides a real annular
+/// source group. Exact ring association and the final body remain mandatory.
 fn one_bore(
     k: &Kernel,
     w: &MeshWork,
     cells: &Cells,
     rows: &[[f64; 3]],
+    axis: usize,
     height: [f64; 2],
     tolerance: f64,
-) -> Result<Option<Vec<RadialPatchClaim>>> {
-    let mut stations = Vec::<(f64, BTreeSet<u32>)>::new();
-    for (_, aliases) in cells {
-        for &alias in aliases {
-            w.spend(k, 4096)?;
-            w.reserve_cells(k, 4)?;
-            let [_, _, z] = row(rows, alias)?;
-            match stations.iter_mut().find(|(level, _)| *level == z) {
-                Some((_, ring)) => {
-                    ring.insert(alias);
+) -> Result<Option<AxialBore>> {
+    let mut levels = Vec::new();
+    for (_, tri) in cells {
+        for &id in tri {
+            w.spend(k, 128)?;
+            let [_, _, z] = row(rows, id)?;
+            if !levels.contains(&z) {
+                if levels.len() >= 16 {
+                    return Ok(None);
                 }
-                None => {
-                    if stations.len() == 16 {
-                        return Ok(None);
-                    }
-                    stations.push((z, BTreeSet::from([alias])));
+                w.reserve_cells(k, 1)?;
+                levels.push(z);
+            }
+        }
+    }
+    levels.sort_by(f64::total_cmp);
+    if levels.len() < 2 || levels.first() != Some(&height[0]) || levels.last() != Some(&height[1]) {
+        return Ok(None);
+    }
+    let mut stripes = vec![Vec::new(); levels.len() - 1];
+    let mut flats = vec![Vec::new(); levels.len()];
+    let mut rims: Vec<[BTreeSet<u32>; 2]> = (0..levels.len() - 1)
+        .map(|_| [BTreeSet::new(), BTreeSet::new()])
+        .collect();
+    for (id, tri) in cells {
+        let [a, b, c] = *tri;
+        let zs = [row(rows, a)?[2], row(rows, b)?[2], row(rows, c)?[2]];
+        let lo = zs.into_iter().fold(f64::INFINITY, f64::min);
+        let hi = zs.into_iter().fold(f64::NEG_INFINITY, f64::max);
+        w.spend(k, 512)?;
+        if lo == hi {
+            let at = levels
+                .iter()
+                .position(|v| *v == lo)
+                .ok_or_else(|| invalid("lost annular level"))?;
+            if at == 0 || at + 1 == levels.len() {
+                return Ok(None);
+            }
+            w.reserve_cells(k, 1)?;
+            flats[at].push(*id);
+        } else {
+            let Some(at) = levels.windows(2).position(|p| p == [lo, hi]) else {
+                return Ok(None);
+            };
+            w.reserve_cells(k, 8)?;
+            w.spend(k, 4096)?;
+            stripes[at].push(*id);
+            for (v, z) in tri.iter().copied().zip(zs) {
+                let [first, last] = &mut rims[at];
+                if z == lo {
+                    first.insert(v);
+                } else if z == hi {
+                    last.insert(v);
                 }
             }
         }
     }
-    stations.sort_by(|a, b| a.0.total_cmp(&b.0));
-    if stations.len() < 2
-        || stations.first().map(|s| s.0) != Some(height[0])
-        || stations.last().map(|s| s.0) != Some(height[1])
-    {
+    if stripes.iter().any(Vec::is_empty) {
         return Ok(None);
     }
     let budget = Work::with_budget(k, w)?;
-    let mut circles = Vec::new();
-    for (z, ring) in &stations {
-        if ring.len() < 5 {
+    let fit = |ids: &BTreeSet<u32>| -> Result<Option<(Vec3, f64)>> {
+        if ids.len() < 5 {
             return Ok(None);
         }
-        w.reserve_cells(k, ring.len().saturating_mul(3))?;
-        let points = ring
+        w.spend(k, ids.len().saturating_mul(128))?;
+        w.reserve_cells(k, ids.len().saturating_mul(3))?;
+        let points = ids
             .iter()
-            .map(|&a| row(rows, a).map(|[x, y, _]| Vec3::new(x, y, 0.)))
+            .map(|id| row(rows, *id).map(|[x, y, _]| Vec3::new(x, y, 0.)))
             .collect::<Result<Vec<_>>>()?;
-        let Some((c, r)) = fit_circle(&points, Vec3::Z, &budget) else {
-            budget.check()?;
+        let result = fit_circle(&points, Vec3::Z, &budget);
+        budget.check()?;
+        Ok(result.filter(|&(c, r)| r > tolerance && r.is_finite() && c.is_finite()))
+    };
+    let mut dimensions = Vec::new();
+    for [a, b] in &rims {
+        let (Some(a), Some(b)) = (fit(a)?, fit(b)?) else {
             return Ok(None);
         };
-        if r <= tolerance || !r.is_finite() || !c.x.is_finite() || !c.y.is_finite() {
-            return Ok(None);
-        }
-        circles.push((*z, c, r));
+        dimensions.push([a, b]);
     }
-    let n = circles.len() as f64;
-    let centre = circles.iter().fold(Vec3::ZERO, |p, (_, c, _)| p + *c / n);
-    if circles
+    let total = (2 * dimensions.len()) as f64;
+    let centre = dimensions
         .iter()
-        .any(|(_, c, _)| c.distance(centre) > tolerance)
+        .flatten()
+        .fold(Vec3::ZERO, |p, (c, _)| p + *c / total);
+    if !centre.is_finite()
+        || dimensions
+            .iter()
+            .flatten()
+            .any(|(c, _)| c.distance(centre) > tolerance)
     {
         return Ok(None);
     }
-    // Within one near-constant run, choose one exact cylinder radius.
-    // The complete original band later proves its own error to this law.
-    let mut rest = circles.as_mut_slice();
-    while !rest.is_empty() {
-        let (_, _, reference) = rest
-            .first()
-            .copied()
-            .ok_or_else(|| invalid("bore radius missing"))?;
-        let n = rest
-            .iter()
-            .take_while(|(_, _, r)| (*r - reference).abs() <= tolerance * 0.0001)
-            .count();
-        let (run, next) = rest.split_at_mut(n);
-        let mean = run.iter().map(|(_, _, r)| *r / (n as f64)).sum::<f64>();
-        for (_, _, r) in run {
-            *r = mean;
-        }
-        rest = next;
-    }
-    let mut bands = Vec::new();
-    for pair in circles.windows(2) {
-        let [a, b] = pair else {
-            return Err(invalid("missing adjacent bore stations"));
-        };
-        bands.push(RadialPatchClaim {
-            triangles: Vec::new(),
-            center: [centre.x, centre.y],
-            law: RadiusLaw {
-                height: [a.0, b.0],
-                radius: [a.2, b.2],
-            },
-            concave: true,
-        });
-    }
-    for (id, aliases) in cells {
-        w.spend(k, 512)?;
-        let [a, b, c] = *aliases;
-        let zs = [row(rows, a)?[2], row(rows, b)?[2], row(rows, c)?[2]];
-        let low = zs.into_iter().fold(f64::INFINITY, f64::min);
-        let high = zs.into_iter().fold(f64::NEG_INFINITY, f64::max);
-        let Some(band) = bands.iter_mut().find(|band| band.law.height == [low, high]) else {
+    // Using one precomputed radius for a contiguous constant run keeps its
+    // joins bit-identical. A real shoulder always starts another radius run.
+    let mut logical: Vec<f64> = Vec::new();
+    let mut indices: Vec<[usize; 2]> = Vec::new();
+    let mut shoulders = Vec::new();
+    for (i, [(_, a), (_, b)]) in dimensions.into_iter().enumerate() {
+        let join = i > 0 && flats[i].is_empty();
+        if join && rims[i - 1][1] != rims[i][0] {
             return Ok(None);
+        }
+        let start = if join {
+            let p = indices[i - 1][1];
+            if (logical[p] - a).abs() > tolerance * 0.0001 {
+                return Ok(None);
+            }
+            p
+        } else {
+            if i > 0 {
+                let old = logical[indices[i - 1][1]];
+                if (old - a).abs() <= tolerance || !rims[i - 1][1].is_disjoint(&rims[i][0]) {
+                    return Ok(None);
+                }
+                shoulders.push(BoreShoulder {
+                    after_band: i - 1,
+                    triangles: core::mem::take(&mut flats[i]),
+                });
+            }
+            logical.push(a);
+            logical.len() - 1
         };
-        w.reserve_output(k, 1)?;
-        band.triangles.push(*id);
+        let end = if (logical[start] - b).abs() <= tolerance * 0.0001 {
+            start
+        } else {
+            logical.push(b);
+            logical.len() - 1
+        };
+        indices.push([start, end]);
     }
-    if bands.iter().any(|band| band.triangles.is_empty()) {
-        return Ok(None);
+    let bands = stripes
+        .into_iter()
+        .zip(levels.windows(2))
+        .zip(indices)
+        .map(|((triangles, levels), [a, b])| RadialPatchClaim {
+            triangles,
+            center: [centre.x, centre.y],
+            concave: true,
+            law: RadiusLaw {
+                height: [levels[0], levels[1]],
+                radius: [logical[a], logical[b]],
+            },
+        })
+        .collect();
+    Ok(Some(AxialBore {
+        axis,
+        bands,
+        shoulders,
+    }))
+}
+
+pub(super) fn axes_for(axis: usize) -> [usize; 3] {
+    [(axis + 1) % 3, (axis + 2) % 3, axis]
+}
+
+/// Two finite axial bands on different cardinal directions have a common
+/// perpendicular coordinate. Strictly disjoint complete projections onto
+/// that coordinate keep their entire radial envelopes apart.
+pub(super) fn perpendicular_bands_are_separate(
+    [axis_a, axis_b]: [usize; 2],
+    [a, b]: [&RadialPatchClaim; 2],
+    [ea, eb]: [f64; 2],
+) -> bool {
+    use crate::blend::fillet_section::interval::Ivl;
+    if axis_a == axis_b || axis_a > 2 || axis_b > 2 {
+        return false;
     }
-    Ok(Some(bands))
+    let c = 3 - axis_a - axis_b;
+    let [Some(ia), Some(ib)] =
+        [axis_a, axis_b].map(|ax| axes_for(ax).into_iter().take(2).position(|x| x == c))
+    else {
+        return false;
+    };
+    let gap = Ivl::from(a.center[ia]) - Ivl::from(b.center[ib]);
+    let gap_lower = if gap.lo > 0. {
+        gap.lo
+    } else if gap.hi < 0. {
+        -gap.hi
+    } else {
+        0.
+    };
+    let envelope = Ivl::from(a.law.radius[0].max(a.law.radius[1]))
+        + Ivl::from(b.law.radius[0].max(b.law.radius[1]))
+        + Ivl::from(ea)
+        + Ivl::from(eb);
+    gap.is_finite() && envelope.is_finite() && gap_lower > envelope.hi
 }
 
 pub(crate) fn propose_rectangular_bored_stock_with_work(
@@ -205,73 +304,94 @@ pub(crate) fn propose_rectangular_bored_stock_with_work(
     source: &ExactSourceView<'_, '_>,
     tolerance: f64,
 ) -> Result<Option<BoredStockProposal>> {
-    for axes in [[0, 1, 2], [1, 2, 0], [2, 0, 1]] {
-        let mut rows = Vec::new();
-        let mut bounds = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
-        for i in 0..source.alias_count() {
-            w.spend(k, 16)?;
-            w.reserve_cells(k, 3)?;
-            let p = source
-                .source()
-                .position(u32::try_from(i).map_err(|_| invalid("bore alias overflow"))?)
-                .ok_or_else(|| invalid("original retained bore alias missing"))?;
-            let projected = axes.map(|a| p[a]);
-            for (j, v) in projected.iter().copied().enumerate() {
-                bounds[0][j] = bounds[0][j].min(v);
-                bounds[1][j] = bounds[1][j].max(v);
+    let mut rows = Vec::new();
+    let mut bounds = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
+    for i in 0..source.alias_count() {
+        w.spend(k, 16)?;
+        w.reserve_cells(k, 3)?;
+        let p = source
+            .source()
+            .position(u32::try_from(i).map_err(|_| invalid("bore alias overflow"))?)
+            .ok_or_else(|| invalid("original retained bore alias missing"))?;
+        for (j, value) in p.iter().copied().enumerate() {
+            bounds[0][j] = bounds[0][j].min(value);
+            bounds[1][j] = bounds[1][j].max(value);
+        }
+        rows.push(p);
+    }
+    let [lo, hi] = bounds;
+    if lo.into_iter().zip(hi).any(|(a, b)| b - a <= 2. * tolerance) {
+        return Ok(None);
+    }
+    let mut planes: [Vec<usize>; 6] = core::array::from_fn(|_| Vec::new());
+    let mut inner = Vec::new();
+    for (id, [a, b, c]) in source.triangles() {
+        w.spend(k, 64)?;
+        w.reserve_cells(k, 5)?;
+        let points = [row(&rows, a)?, row(&rows, b)?, row(&rows, c)?];
+        let plane = (0..6).find(|i| points.iter().all(|p| p[*i / 2] == bounds[*i % 2][*i / 2]));
+        if let Some(i) = plane {
+            planes[i].push(id);
+        } else {
+            inner.push((id, [a, b, c]));
+        }
+    }
+    if inner.is_empty() || planes.iter().any(Vec::is_empty) {
+        return Ok(None);
+    }
+    w.reserve_cells(k, inner.len().saturating_mul(5))?;
+    let groups = bore_components(k, w, &inner)?;
+    if groups.len() > 16 {
+        return Ok(None);
+    }
+    let basis = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
+    let make_chart = |axis: usize| -> Result<AxialEndpointProposal> {
+        let axes = axes_for(axis);
+        w.reserve_cells(k, rows.len().saturating_mul(3))?;
+        w.spend(k, rows.len().saturating_mul(4))?;
+        Ok(AxialEndpointProposal {
+            origin: [0.; 3],
+            columns: axes.map(|j| basis[j]),
+            rows: rows.iter().map(|p| axes.map(|j| p[j])).collect(),
+        })
+    };
+    let charts = [make_chart(0)?, make_chart(1)?, make_chart(2)?];
+    let mut bores = Vec::new();
+    for group in &groups {
+        let mut matched = None;
+        for axis in [2, 0, 1] {
+            if let Some(bore) = one_bore(
+                k,
+                w,
+                group,
+                &charts[axis].rows,
+                axis,
+                [lo[axis], hi[axis]],
+                tolerance,
+            )? {
+                if matched.replace(bore).is_some() {
+                    return Ok(None);
+                }
             }
-            rows.push(projected);
         }
-        let [lo, hi] = bounds;
-        if lo.into_iter().zip(hi).any(|(a, b)| b - a <= 2. * tolerance) {
-            continue;
-        }
-        let mut planes: [Vec<usize>; 6] = core::array::from_fn(|_| Vec::new());
-        let mut inner = Vec::new();
-        for (id, [a, b, c]) in source.triangles() {
-            w.spend(k, 64)?;
-            let points = [row(&rows, a)?, row(&rows, b)?, row(&rows, c)?];
-            let plane = (0..6).find(|i| points.iter().all(|p| p[*i / 2] == bounds[*i % 2][*i / 2]));
-            w.reserve_cells(k, 5)?;
-            if let Some(i) = plane {
-                planes[i].push(id);
-            } else {
-                inner.push((id, [a, b, c]));
-            }
-        }
-        if inner.is_empty() || planes.iter().any(Vec::is_empty) {
-            continue;
-        }
-        w.reserve_cells(k, inner.len().saturating_mul(5))?;
-        let groups = bore_components(k, w, &inner)?;
-        if groups.len() > 16 {
-            continue;
-        }
-        let mut bores = Vec::new();
-        for g in &groups {
-            if let Some(bore) = one_bore(k, w, g, &rows, [lo[2], hi[2]], tolerance)? {
-                bores.push(bore);
-            } else {
-                break;
-            }
-        }
-        if bores.len() != groups.len() || bores.iter().all(|b| b.len() == 1) {
-            continue;
-        }
-        let basis = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
-        return Ok(Some(BoredStockProposal {
-            chart: AxialEndpointProposal {
-                origin: [0.; 3],
-                columns: axes.map(|i| basis[i]),
-                rows,
-            },
-            bounds,
-            planes,
-            bores,
-        }));
+        let Some(bore) = matched else {
+            return Ok(None);
+        };
+        bores.push(bore);
+    }
+    if bores
+        .iter()
+        .all(|b| b.axis == bores[0].axis && b.bands.len() == 1)
+    {
+        return Ok(None);
     }
     w.check(k)?;
-    Ok(None)
+    Ok(Some(BoredStockProposal {
+        charts,
+        bounds,
+        planes,
+        bores,
+    }))
 }
 
 /// Construct one fixed bordered blank. Each analytic bore band is sewn into
@@ -296,21 +416,18 @@ impl BoredStockProposal {
         };
         use crate::topology::{Brep, FaceId};
 
-        let [x, y, z] = self.chart.columns.map(Vec3::from_array);
-        let origin = Vec3::from_array(self.chart.origin);
-        let world = |[a, b, c]: [f64; 3]| origin + a * x + b * y + c * z;
         let [lo, hi] = self.bounds;
         let [u, v, h] = lo;
         let [a, b, t] = hi;
-        let bottom = [[u, v, h], [a, v, h], [a, b, h], [u, b, h]].map(world);
-        let top = [[u, v, t], [a, v, t], [a, b, t], [u, b, t]].map(world);
+        let bottom = [[u, v, h], [a, v, h], [a, b, h], [u, b, h]].map(Vec3::from_array);
+        let top = [[u, v, t], [a, v, t], [a, b, t], [u, b, t]].map(Vec3::from_array);
         let rect = |ring: [Vec3; 4]| -> Result<Vec<Curve>> {
             ring.into_iter()
                 .zip(ring.into_iter().cycle().skip(1))
                 .map(|(p, q)| Ok(Curve::from(Line::create_line_segment(3, p, q, None)?)))
                 .collect()
         };
-        let mut caps: [Vec<Curve>; 2] = [Vec::new(), Vec::new()];
+        let mut caps: [Vec<Curve>; 6] = core::array::from_fn(|_| Vec::new());
 
         let mut candidate = new_brep(k, USE_DEFAULT, USE_DEFAULT)?;
         let mut notify = ArenaNotifyState::new(&candidate);
@@ -376,22 +493,63 @@ impl BoredStockProposal {
                 }
                 Ok(())
             };
-            for ((b0, b1), (t0, t1)) in bottom
-                .into_iter()
-                .zip(bottom.into_iter().cycle().skip(1))
-                .zip(top.into_iter().zip(top.into_iter().cycle().skip(1)))
-            {
-                planar(
+            let build_shoulder = |k: &mut Kernel,
+                                  body: &mut Brep,
+                                  rings: [(f64, Curve); 2],
+                                  origin: Vec3,
+                                  [x, y]: [Vec3; 2],
+                                  env: &mut FaceBuildEnv<'_, '_>|
+             -> Result<()> {
+                let [(a, first), (b, second)] = rings;
+                if !(a > 0. && b > 0. && a != b) {
+                    return Err(invalid(
+                        "a bore shoulder must have two distinct positive diameters",
+                    ));
+                }
+                let (outer, inner, forward) = if a < b {
+                    (second, first, true)
+                } else {
+                    (first, second, false)
+                };
+                let cover = 2. * a.max(b);
+                let domain = Extent2d::from_bounds(-cover, -cover, cover, cover);
+                let orientation = if forward { y } else { -y };
+                let plane = Plane::new(origin, x, orientation, Vec2::new(1., 1.), &domain);
+                let input = FaceCurvesInput {
+                    loops: vec![1, 1],
+                    curves_3d: Some(vec![Some(outer), Some(inner)]),
+                    uv_curves: None,
+                    orientations: if forward {
+                        vec![OrientType::Same, OrientType::Opposite]
+                    } else {
+                        vec![OrientType::Opposite, OrientType::Same]
+                    },
+                    loop_points: Vec::new(),
+                };
+                let region = body.infinite_region();
+                let made = make_face_with_curves(
                     k,
-                    &mut candidate,
-                    [b0, b1, t1, t0],
-                    Vec::new(),
-                    OrientType::Opposite,
-                    &mut face_env,
+                    body,
+                    region,
+                    input,
+                    Surface::from(plane),
+                    &domain,
+                    OrientType::Same,
+                    None,
+                    env.this_face,
+                    env.env,
                 )?;
-            }
+                if made.face.is_none() {
+                    return Err(invalid("bore shoulder made no planar annulus"));
+                }
+                Ok(())
+            };
             for hole in &self.bores {
-                for (i, band) in hole.iter().enumerate() {
+                let [x, y, z] = self.charts[hole.axis].columns.map(Vec3::from_array);
+                let world = |[a, b, c]: [f64; 3]| a * x + b * y + c * z;
+                let side = hole.axis * 2;
+                let mut previous_step_rim = None;
+                for (i, band) in hole.bands.iter().enumerate() {
                     w.spend(k, 1024)?;
                     w.reserve_cells(k, 256)?;
                     let [start, end] = band.law.height;
@@ -409,29 +567,29 @@ impl BoredStockProposal {
                         Cone::create_canonical(k, &placement, r, s, end - start, false, false)?
                     };
                     let uv = cone.rev().base().natural_uv_domain();
+                    let rim = |k: &Kernel, level: f64| -> Result<Curve> {
+                        Ok(cone
+                            .create_iso_parametric_curve(k, SurfParamType::V, level, None, false)?
+                            .curve)
+                    };
                     if i == 0 {
-                        caps[0].push(
-                            cone.create_iso_parametric_curve(
-                                k,
-                                SurfParamType::V,
-                                uv.min().y,
-                                None,
-                                false,
-                            )?
-                            .curve,
-                        );
+                        caps[side].push(rim(k, uv.min().y)?);
                     }
-                    if i + 1 == hole.len() {
-                        caps[1].push(
-                            cone.create_iso_parametric_curve(
-                                k,
-                                SurfParamType::V,
-                                uv.max().y,
-                                None,
-                                false,
-                            )?
-                            .curve,
-                        );
+                    if i + 1 == hole.bands.len() {
+                        caps[side + 1].push(rim(k, uv.max().y)?);
+                    }
+                    if let Some(last) = previous_step_rim.take() {
+                        build_shoulder(
+                            k,
+                            &mut candidate,
+                            [last, (r, rim(k, uv.min().y)?)],
+                            world([cx, cy, start]),
+                            [x, y],
+                            &mut face_env,
+                        )?;
+                    }
+                    if hole.shoulders.iter().any(|p| p.after_band == i) {
+                        previous_step_rim = Some((s, rim(k, uv.max().y)?));
                     }
                     let id = create_face_from_surface(
                         k,
@@ -442,8 +600,32 @@ impl BoredStockProposal {
                     )?;
                     band_faces.push(id);
                 }
+                if previous_step_rim.is_some() {
+                    return Err(invalid("bore shoulder was missing its next band"));
+                }
             }
-            let [lo_holes, hi_holes] = caps;
+            for (i, ((b0, b1), (t0, t1))) in bottom
+                .into_iter()
+                .zip(bottom.into_iter().cycle().skip(1))
+                .zip(top.into_iter().zip(top.into_iter().cycle().skip(1)))
+                .enumerate()
+            {
+                let side = [2, 1, 3, 0][i];
+                let sense = if side % 2 == 0 {
+                    OrientType::Same
+                } else {
+                    OrientType::Opposite
+                };
+                planar(
+                    k,
+                    &mut candidate,
+                    [b0, b1, t1, t0],
+                    core::mem::take(&mut caps[side]),
+                    sense,
+                    &mut face_env,
+                )?;
+            }
+            let [_, _, _, _, lo_holes, hi_holes] = caps;
             let [p0, p1, p2, p3] = bottom;
             planar(
                 k,

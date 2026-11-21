@@ -5,8 +5,9 @@ use super::super::work::MeshWork;
 use super::analytic_ruling::{
     prove_native_radial_edges_with_work, prove_native_radial_values_with_work,
 };
-use super::bored_stock_proposal::BoredStockProposal;
+use super::bored_stock_proposal::{axes_for, perpendicular_bands_are_separate, BoredStockProposal};
 use super::radial_curve::{prove_native_radial_cap_with_work, prove_native_radial_curve_with_work};
+use super::radial_frame::AxialEndpointProposal;
 use super::radial_source::RadialPatchClaim;
 use super::rectangular_trim::prove_rectangular_trim_with_work;
 use super::target_complex::{target_complex_with_work, TargetCover, TargetPatchClaim};
@@ -45,20 +46,30 @@ fn native_clearance(
         r + (s - r) * ((Ivl::from(x) - a) / (b - a)) + Ivl::from(margin)
     };
     for (i, own) in plan.bores.iter().enumerate() {
-        for p in own {
-            for c in 0..2 {
+        for p in &own.bands {
+            for (c, g) in axes_for(own.axis).into_iter().take(2).enumerate() {
                 w.spend_core(k, 32)?;
                 let radius = Ivl::from(p.law.radius[0].max(p.law.radius[1])) + Ivl::from(margin);
                 let centre = Ivl::from(p.center[c]);
-                for available in [centre - Ivl::from(lo[c]), Ivl::from(hi[c]) - centre] {
+                for available in [centre - Ivl::from(lo[g]), Ivl::from(hi[g]) - centre] {
                     if !(available - radius - Ivl::from(margin)).is_positive() {
                         return Err(refused("native bore envelope may cross actual stock wall"));
                     }
                 }
             }
             for earlier in plan.bores.iter().take(i) {
-                for q in earlier {
+                for q in &earlier.bands {
                     w.spend_core(k, 64)?;
+                    if own.axis != earlier.axis {
+                        if !perpendicular_bands_are_separate(
+                            [own.axis, earlier.axis],
+                            [p, q],
+                            [margin; 2],
+                        ) {
+                            return Err(refused("native perpendicular bore envelopes may overlap"));
+                        }
+                        continue;
+                    }
                     let low = p.law.height[0].max(q.law.height[0]);
                     let high = p.law.height[1].min(q.law.height[1]);
                     if low > high {
@@ -117,8 +128,17 @@ pub(crate) fn prove_native_bored_stock_with_work(
         return Err(refused("native stock has no remaining distance allowance"));
     }
     native_clearance(w, k, plan, allowance)?;
-    let bands: Vec<_> = plan.bores.iter().flatten().collect();
-    if body.face_list().len() != 6 + bands.len() {
+    let bands: Vec<_> = plan
+        .bores
+        .iter()
+        .flat_map(|b| b.bands.iter().map(|claim| (b.axis, claim)))
+        .collect();
+    let shoulder_count = plan
+        .bores
+        .iter()
+        .map(|bore| bore.shoulders.len())
+        .sum::<usize>();
+    if body.face_list().len() != 6 + bands.len() + shoulder_count {
         return Err(refused(
             "native stock surface inventory differs from its source model",
         ));
@@ -138,15 +158,10 @@ pub(crate) fn prove_native_bored_stock_with_work(
             "native stock does not have one exterior and one material region",
         ));
     }
-    let basis = plan.chart.columns.map(Vec3::from_array);
-    let origin = Vec3::from_array(plan.chart.origin);
-    let local = |q: Vec3| basis.map(|v| v.dot(q - origin));
-    let world = |[a, b, c]: [f64; 3]| {
-        let [x, y, z] = basis;
-        (origin + a * x + b * y + c * z).to_array()
-    };
+    let basis = [Vec3::X, Vec3::Y, Vec3::Z];
     let mut planes = [None; 6];
     let mut faces = vec![None; bands.len()];
+    let mut shoulders = Vec::with_capacity(shoulder_count);
     for &id in body.face_list() {
         w.spend_core(k, 64)?;
         let s =
@@ -159,7 +174,7 @@ pub(crate) fn prove_native_bored_stock_with_work(
         match s.kind() {
             SurfaceKind::Plane(p) => {
                 let frame = p.position();
-                let q = local(frame.origin());
+                let q = frame.origin().to_array();
                 let candidates = (0..6).filter(|&i| {
                     let a = i / 2;
                     q[a] == plan.bounds[i % 2][a]
@@ -167,19 +182,36 @@ pub(crate) fn prove_native_bored_stock_with_work(
                         && frame.y_axis().dot(basis[a]) == 0.
                 });
                 let mut choices = candidates;
-                let (Some(i), None) = (choices.next(), choices.next()) else {
-                    return Err(refused(
-                        "actual Native Plane is not one exact model coordinate plane",
-                    ));
-                };
-                if planes[i].replace(id).is_some() {
-                    return Err(refused("two Native faces claim the same stock Plane"));
+                match (choices.next(), choices.next()) {
+                    (Some(i), None) => {
+                        if planes[i].replace(id).is_some() {
+                            return Err(refused("two Native faces claim the same stock Plane"));
+                        }
+                    }
+                    (None, None)
+                        if (0..3).any(|a| {
+                            frame.x_axis().dot(basis[a]) == 0.
+                                && frame.y_axis().dot(basis[a]) == 0.
+                                && q[a] > plan.bounds[0][a]
+                                && q[a] < plan.bounds[1][a]
+                        }) =>
+                    {
+                        shoulders.push(id);
+                    }
+                    _ => {
+                        return Err(refused(
+                            "actual Native Plane does not match an outer wall or axial shoulder",
+                        ))
+                    }
                 }
             }
             SurfaceKind::Cone(c) => {
-                let [x, y, z] = local(c.rev().position().origin());
-                let mut choices = bands.iter().enumerate().filter(|(_, band)| {
-                    (x - band.center[0]).hypot(y - band.center[1]) <= allowance
+                let position = c.rev().position();
+                let origin = position.origin().to_array();
+                let mut choices = bands.iter().enumerate().filter(|(_, (axis, band))| {
+                    let [x, y, z] = axes_for(*axis).map(|i| origin[i]);
+                    position.z_axis().cross(basis[*axis]).length() == 0.
+                        && (x - band.center[0]).hypot(y - band.center[1]) <= allowance
                         && (z - band.law.height[0]).abs() <= allowance
                 });
                 let (Some((i, _)), None) = (choices.next(), choices.next()) else {
@@ -194,11 +226,18 @@ pub(crate) fn prove_native_bored_stock_with_work(
             _ => return Err(refused("unrelated Native surface in bored stock")),
         }
     }
-    let instances = planes
+    if shoulders.len() != shoulder_count {
+        return Err(refused(
+            "native stock did not preserve every shoulder Plane",
+        ));
+    }
+    let shoulder_start = 6 + bands.len();
+    let mut instances = planes
         .into_iter()
         .chain(faces)
         .map(|id| id.ok_or_else(|| refused("complete Native face inventory missing")))
         .collect::<Result<Vec<_>>>()?;
+    instances.extend(shoulders);
     w.reserve_cells_core(k, instances.len().saturating_mul(2))?;
     let claims = instances
         .iter()
@@ -213,7 +252,7 @@ pub(crate) fn prove_native_bored_stock_with_work(
 
     let mut error = 0_f64;
     let mut radial_rims = Vec::new();
-    for (&id, band) in instances.iter().skip(6).zip(bands) {
+    for (&id, (axis, band)) in instances.iter().skip(6).zip(bands) {
         let s =
             face::surface(body, id)?.ok_or_else(|| refused("actual Native band disappeared"))?;
         let SurfaceKind::Cone(c) = s.kind() else {
@@ -223,7 +262,7 @@ pub(crate) fn prove_native_bored_stock_with_work(
             k,
             w,
             s,
-            &plan.chart,
+            &plan.charts[axis],
             band.center,
             band.law,
             allowance,
@@ -256,21 +295,65 @@ pub(crate) fn prove_native_bored_stock_with_work(
         }
         radial_rims.push(r);
     }
-    let mut bottom = Vec::<(EdgeId, &RadialPatchClaim)>::new();
-    let mut top = Vec::<(EdgeId, &RadialPatchClaim)>::new();
+    let mut cap_rims: [Vec<(EdgeId, &RadialPatchClaim)>; 6] = core::array::from_fn(|_| Vec::new());
     let mut start = 0usize;
+    let mut matched = BTreeSet::new();
     for bore in &plan.bores {
         let end = start
-            .checked_add(bore.len())
+            .checked_add(bore.bands.len())
             .ok_or_else(|| refused("bore index overflow"))?;
         let rs = radial_rims
             .get(start..end)
             .ok_or_else(|| refused("Native bore inventory is incomplete"))?;
-        for pair in rs.windows(2) {
+        for (join, pair) in rs.windows(2).enumerate() {
             let [a, b] = pair else {
                 return Err(refused("missing native band neighbour"));
             };
-            if a[1] != b[0] {
+            if bore
+                .shoulders
+                .iter()
+                .any(|shoulder| shoulder.after_band == join)
+            {
+                let lower = &bore.bands[join];
+                let upper = &bore.bands[join + 1];
+                let lower_edge = *a[1]
+                    .iter()
+                    .next()
+                    .ok_or_else(|| refused("missing lower shoulder edge"))?;
+                let upper_edge = *b[0]
+                    .iter()
+                    .next()
+                    .ok_or_else(|| refused("missing upper shoulder edge"))?;
+                // Each actual annulus must use exactly the two adjoining
+                // whole band edges. A same-height but unrelated face cannot match.
+                let Some(paired) = target.edges.get(&lower_edge) else {
+                    return Err(refused("native shoulder edge absent from target complex"));
+                };
+                let actual_index = paired
+                    .iter()
+                    .find_map(|&(i, _)| (i >= shoulder_start).then_some(i))
+                    .ok_or_else(|| refused("native step edge does not adjoin an interior Plane"))?;
+                if !matched.insert(actual_index) {
+                    return Err(refused(
+                        "same actual annulus was used for two source shoulders",
+                    ));
+                }
+                error = error.max(prove_stock_shoulder(
+                    k,
+                    w,
+                    body,
+                    &plan.charts[bore.axis],
+                    instances[actual_index],
+                    &target.patches[actual_index],
+                    [
+                        (lower_edge, lower.law.radius[1]),
+                        (upper_edge, upper.law.radius[0]),
+                    ],
+                    lower.center,
+                    lower.law.height[1],
+                    allowance,
+                )?);
+            } else if a[1] != b[0] {
                 return Err(refused(
                     "native neighbouring bore bands do not share their exact rim",
                 ));
@@ -280,17 +363,20 @@ pub(crate) fn prove_native_bored_stock_with_work(
             .first()
             .and_then(|x| x[0].first())
             .copied()
-            .zip(bore.first())
+            .zip(bore.bands.first())
             .ok_or_else(|| refused("missing native lower bore rim"))?;
         let b = rs
             .last()
             .and_then(|x| x[1].first())
             .copied()
-            .zip(bore.last())
+            .zip(bore.bands.last())
             .ok_or_else(|| refused("missing native upper bore rim"))?;
-        bottom.push(a);
-        top.push(b);
+        cap_rims[bore.axis * 2].push(a);
+        cap_rims[bore.axis * 2 + 1].push(b);
         start = end;
+    }
+    if matched.len() != shoulder_count {
+        return Err(refused("native stock has an unmatched interior Plane"));
     }
     for (i, (&id, actual)) in instances.iter().zip(&target.patches).take(6).enumerate() {
         let coordinate = i / 2;
@@ -308,7 +394,7 @@ pub(crate) fn prove_native_bored_stock_with_work(
             p[a] = x;
             p[b] = y;
             p[coordinate] = level;
-            world(p)
+            p
         });
         let s =
             face::surface(body, id)?.ok_or_else(|| refused("actual stock Plane disappeared"))?;
@@ -322,13 +408,7 @@ pub(crate) fn prove_native_bored_stock_with_work(
         let (planar_error, orientation) =
             prove_stock_outer_ring(k, w, body, plane, rect, corners, allowance)?;
         error = error.max(planar_error);
-        let holes: &[(EdgeId, &RadialPatchClaim)] = if i == 4 {
-            &bottom
-        } else if i == 5 {
-            &top
-        } else {
-            &[]
-        };
+        let holes = &cap_rims[i];
         if actual.rims.len() != 1 + holes.len() {
             return Err(refused("native Plane lost or gained a complete hole"));
         }
@@ -344,45 +424,24 @@ pub(crate) fn prove_native_bored_stock_with_work(
                 .iter()
                 .find(|(e, _)| *e == usage.edge)
                 .ok_or_else(|| refused("native cap hole is not the same edge as its bore"))?;
-            let radius = band.law.radius[i % 2];
-            let interval = edge::interval(body, usage.edge)?;
-            let xyz = edge::curve(body, usage.edge)?
-                .ok_or_else(|| refused("physical bore edge missing"))?;
-            let (Some(uv), _) = eu::uv_trim_curve(body, usage.use_id)? else {
-                return Err(refused("planar bore UV boundary missing"));
-            };
-            let outer = prove_native_radial_curve_with_work(
+            let (distance, sign) = prove_stock_circle(
                 k,
                 w,
-                xyz,
-                interval,
-                usage.forward,
-                &plan.chart,
+                body,
+                plane,
+                usage,
+                &plan.charts[coordinate],
                 band.center,
                 level,
-                radius,
+                band.law.radius[i % 2],
                 allowance,
             )?;
-            let (cut, sign) = prove_native_radial_cap_with_work(
-                k,
-                w,
-                plane,
-                uv,
-                xyz,
-                interval,
-                usage.forward,
-                &plan.chart,
-                band.center,
-                level,
-                radius,
-                allowance.min(body.tolerance()),
-            )?;
-            if sign == orientation || sign != outer.sense {
+            if sign == orientation {
                 return Err(refused(
                     "native through-hole loop does not subtract material from its cap",
                 ));
             }
-            error = error.max(cut).max(outer.world_error_upper);
+            error = error.max(distance);
         }
     }
     if error > allowance {
@@ -499,4 +558,154 @@ fn prove_stock_outer_ring(
         error,
         orientation.ok_or_else(|| refused("stock rectangle is not oriented"))?,
     ))
+}
+
+/// Full circular trim and its physical edge, using the same radial stock model.
+fn prove_stock_circle(
+    k: &Kernel,
+    w: &MeshWork,
+    body: &Brep,
+    plane: &crate::surface::plane::Plane,
+    usage: &super::target_complex::TargetEdgeUse,
+    chart: &AxialEndpointProposal,
+    center: [f64; 2],
+    height: f64,
+    radius: f64,
+    allowance: f64,
+) -> Result<(f64, i32)> {
+    let interval = edge::interval(body, usage.edge)?;
+    let curve =
+        edge::curve(body, usage.edge)?.ok_or_else(|| refused("physical stock circle missing"))?;
+    let (Some(trim), _) = eu::uv_trim_curve(body, usage.use_id)? else {
+        return Err(refused("stock circular UV boundary missing"));
+    };
+    let radial = prove_native_radial_curve_with_work(
+        k,
+        w,
+        curve,
+        interval,
+        usage.forward,
+        chart,
+        center,
+        height,
+        radius,
+        allowance,
+    )?;
+    let (cap, sense) = prove_native_radial_cap_with_work(
+        k,
+        w,
+        plane,
+        trim,
+        curve,
+        interval,
+        usage.forward,
+        chart,
+        center,
+        height,
+        radius,
+        allowance.min(body.tolerance()),
+    )?;
+    if radial.sense != sense {
+        return Err(refused(
+            "stock cap and its physical edge traverse different senses",
+        ));
+    }
+    Ok((cap.max(radial.world_error_upper), sense))
+}
+
+/// Verify a finite planar annulus joining two actual radial bands at a step.
+fn prove_stock_shoulder(
+    k: &Kernel,
+    w: &MeshWork,
+    body: &Brep,
+    chart: &AxialEndpointProposal,
+    id: FaceId,
+    actual: &super::target_complex::TargetPatch,
+    edges_and_radii: [(EdgeId, f64); 2],
+    center: [f64; 2],
+    height: f64,
+    allowance: f64,
+) -> Result<f64> {
+    use crate::nurbs::b_spline_surface_n_lib::p2::OrientType;
+    let s = face::surface(body, id)?.ok_or_else(|| refused("native shoulder plane missing"))?;
+    let SurfaceKind::Plane(plane) = s.kind() else {
+        return Err(refused("native shoulder is not an analytic Plane"));
+    };
+    let axis = Vec3::from_array(chart.columns[2]);
+    let origin = Vec3::from_array(chart.origin);
+    let frame = plane.position();
+    if (frame.origin() - origin).dot(axis) != height
+        || frame.x_axis().dot(axis) != 0.
+        || frame.y_axis().dot(axis) != 0.
+    {
+        return Err(refused(
+            "native shoulder Plane does not use the chosen join station",
+        ));
+    }
+    let [a, b] = edges_and_radii;
+    let delta = Ivl::from(a.1) - Ivl::from(b.1);
+    let distance = if delta.is_positive() {
+        delta.lo
+    } else if delta.hi < 0. {
+        -delta.hi
+    } else {
+        0.
+    };
+    if a.0 == b.0 || !(distance > (Ivl::from(2.) * Ivl::from(allowance)).hi) {
+        return Err(refused(
+            "native bore shoulder lacks two separate radial zones",
+        ));
+    }
+    let [a, b] = if a.1 > b.1 { [a, b] } else { [b, a] };
+    let mut world = 0_f64;
+    let mut checked = BTreeSet::new();
+    if actual.rims.len() != 2 {
+        return Err(refused("bore step is not a complete native annulus"));
+    }
+    for row in &actual.rims {
+        let [u] = row.as_slice() else {
+            return Err(refused("annular shoulder has a split or unrelated rim"));
+        };
+        let radius = if u.edge == a.0 {
+            a.1
+        } else if u.edge == b.0 {
+            b.1
+        } else {
+            return Err(refused(
+                "native shoulder does not own the actual adjacent band edges",
+            ));
+        };
+        if !checked.insert(u.edge) {
+            return Err(refused("bore step reused an annular edge"));
+        }
+        let (error, sign) = prove_stock_circle(
+            k, w, body, plane, u, chart, center, height, radius, allowance,
+        )?;
+        let face_direction = match body.faceuse(u.faceuse)?.orientation {
+            OrientType::Same => 1,
+            OrientType::Opposite => -1,
+            OrientType::Unknown => {
+                return Err(refused("stock shoulder has unknown material sense"))
+            }
+        };
+        let plane_angle = frame.x_axis().cross(frame.y_axis()).dot(axis);
+        if !plane_angle.is_finite() || plane_angle == 0. {
+            return Err(refused("stock shoulder chart orientation unresolved"));
+        }
+        let external_sign = face_direction * if plane_angle > 0. { 1 } else { -1 };
+        let want = if u.edge == a.0 {
+            external_sign
+        } else {
+            -external_sign
+        };
+        if sign != want {
+            return Err(refused(
+                "native annular cap does not cover exactly its material band",
+            ));
+        }
+        world = world.max(error);
+    }
+    // The entire annulus between two finite degree-one circles is mapped by
+    // radial interpolation of their proven ordered boundaries.
+    Ok(world)
 }
